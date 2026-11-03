@@ -1,0 +1,9 @@
+# 本地依赖（不写 C 盘用户目录）
+vendor/
+.wheels/
+.browsers/
+.tmp/
+
+# Python
+__pycache__/
+*.pyc

@@ -1,0 +1,2 @@
+# 只有「真的去录制/执行」才需要装这些；schema 与对齐器是纯 stdlib。
+playwright>=1.44
