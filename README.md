@@ -53,22 +53,80 @@ python -m skillforge rollback --store ./store --skill-id expense
 python -m skillforge status   --store ./store --skill-id expense
 ```
 
-## 它为什么"越用越准"
+## 架构
 
+两张图：**模块之间怎么串**，以及**为什么它不会越修越坏**。
+
+### 数据流：五个引擎与四个契约
+
+```mermaid
+flowchart TB
+  subgraph S1["① 观察 observer"]
+    JS["js_capture<br/>注入页面的采集脚本"] --> REC["recorder<br/>录制器"]
+    REC --> PLC["reconcile<br/>表单快照补录"]
+  end
+
+  subgraph S2["② 蒸馏 compiler"]
+    PLC --> ALN["aligner<br/>序列对齐 Needleman-Wunsch"]
+    ALN --> DIS["distiller<br/>编译成 Skill"]
+  end
+
+  subgraph S3["③ 沙箱执行 executor"]
+    DIS --> HR{"人审三道勾<br/>步骤 · 断言 · precheck"}
+    HR --> DRV["driver"]
+    DRV --- VAL["validator<br/>business 判死 / technical 只当信号"]
+    DRV --- IDM["idempotency<br/>写操作没 precheck 就拒绝"]
+    DRV -.-> PWP["playwright_page<br/>真浏览器"]
+  end
+
+  subgraph S4["④ 异常自愈 healer"]
+    DRV -->|"RunResult 失败分层"| TRI["triage 三层定位"]
+    TRI -->|"候选算子"| DRV
+  end
+
+  subgraph S5["⑤ 版本闸 golden + registry"]
+    TRI --> RUN["runner<br/>跑 Golden Set"]
+    RUN --> GS[("Golden Set<br/>只增不删")]
+    RUN -->|"CaseScore[]"| REG["registry<br/>单调性闸"]
+  end
 ```
-Golden Set（回归基准集，只增不删）
-   │  每次版本变更必须全量通过
-   ▼
-执行 ──▶ 失败 → 三层定位（param / locator / assertion）→ 修复 → 补丁
-   ▲                                        │
-   │                          该次失败用例自动入 Golden Set
-   └──── 单调性闸：① 通过率不降 ② 无单点翻转 ◀──┘
+
+四个贯穿全程的数据契约，全都能落盘（`schema/serde.py`）：
+
+| 契约 | 由谁产出 | 里面有啥 |
+|---|---|---|
+| `RawTrace` | recorder | 动作序列 + 元素指纹 + 操作前后页面摘要 + 表单快照 |
+| `AlignmentReport` | aligner | 变量、不稳定定位器、未对齐步骤、预警 |
+| `Skill` | distiller | 参数、前置条件、步骤、断言、幂等键、状态机 |
+| `RunResult` / `CaseScore` | driver / runner | 每步状态、失败分层、逐条用例通过与否 |
+
+### 版本闭环：失败怎么变成资产
+
+```mermaid
+flowchart LR
+  GS[("Golden Set<br/>只增不删")] --> RUN["跑批"]
+  RUN --> SC["CaseScore 列表"]
+  SC --> GATE{"单调性闸<br/>① 通过率不降<br/>② 无单点翻转"}
+  GATE -->|"过闸"| REG["写入 vN+1<br/>current 指针前移"]
+  GATE -->|"不过"| REJ["GateRejected<br/>库里一个字都不改"]
+  REG --> GS
+
+  FAIL["真实执行失败"] --> TRI["triage 三层定位"]
+  TRI --> PATCH["补丁"]
+  PATCH --> RUN
+  FAIL -->|"该用例自动入集"| GS
+
+  REG -.->|"rollback 只移动指针"| OLD["历史版本不删"]
 ```
 
 **没有"单调性闸"，自愈就只是"用一个 bug 换另一个 bug"。** 所以：
-- 没过闸 → 库里一个字都不改（`GateRejected`）
+
+- 没过闸 → 库里一个字都不改（`GateRejected`，测试里逐字节比对过）
 - 过了闸 → 写入新版本，`current` 指针移动
 - 回滚 = 移动指针，历史版本不删，可以来回切
+
+注意图里那条 `失败 → Golden Set` 的边：**失败不是事故，是新增的训练样本**。
+这是"纵向调优"和"带重试的脚本"的分界线。
 
 ## 跑起来（开发）
 
