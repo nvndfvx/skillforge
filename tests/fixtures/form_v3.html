@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>报销单录入</title></head>
+<body>
+  <h1>报销单录入</h1>
+  <form id="f">
+    <p><label for="customer">客户名称</label>
+       <input id="customer" name="customer" type="text" autocomplete="off"></p>
+    <p><label for="amount">金额</label>
+       <input id="amount" name="amount" type="text" autocomplete="off"></p>
+    <!-- 改版：只是 id 变了，按钮文案/位置/邻接文案都没变 -->
+    <p><button type="button" id="submit-v2">提交</button></p>
+  </form>
+  <div id="result"></div>
+  <script>
+    function digest(s) {
+      var h = 0;
+      for (var i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; }
+      return Math.abs(h);
+    }
+    document.getElementById('submit-v2').addEventListener('click', function () {
+      var c = document.getElementById('customer').value;
+      var a = document.getElementById('amount').value;
+      var id = 'R-2024' + String(digest(c + '|' + a) % 10000).padStart(4, '0');
+      document.getElementById('f').style.display = 'none';
+      document.getElementById('result').textContent = '提交成功 单号 ' + id + ' 已创建';
+      location.hash = '#success';
+    });
+    var preset = new URLSearchParams(location.search).get('receipt');
+    if (preset) {
+      document.getElementById('result').textContent = '提交成功 单号 ' + preset + ' 已创建';
+    }
+  </script>
+</body>
+</html>

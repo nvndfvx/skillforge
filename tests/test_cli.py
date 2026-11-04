@@ -233,6 +233,19 @@ def test_golden_suggest_then_apply():
         assert "origin=manual_edge" in out
 
 
+def test_heal_refuses_without_golden_set():
+    """heal 在空 Golden Set 上必须直接拒绝——没有判据就不该自动改。"""
+    with temp_dir() as tmp:
+        skill_path = tmp / "skill.json"
+        save_skill(_params_skill(), skill_path)
+        code, out = run_cli(
+            "heal", "--store", str(tmp / "store"), "--skill", str(skill_path),
+            "--start-url", "file:///tmp/none.html",
+        )
+        assert code == 1, out
+        assert "Golden Set 是空的" in out
+
+
 def main_() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failures = 0

@@ -220,6 +220,115 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_heal(args: argparse.Namespace) -> int:
+    """失败 → 三层定位 → 自动打补丁 → 过闸发布（或转人工）。"""
+    from .executor.playwright_page import launch_page
+    from .healer.patcher import heal
+
+    store = SkillStore(args.store)
+    skill = load_skill(args.skill)
+    cases = store.cases(skill.skill_id)
+    if not cases:
+        print("Golden Set 是空的：没有判据就不该自动改，先 golden add / golden suggest")
+        return 1
+
+    params = json.loads(args.params) if args.params else dict(cases[0].params)
+    params.setdefault("start_url", args.start_url)
+
+    baseline: list[CaseScore] = []
+    current = store.current_record(skill.skill_id)
+    if args.dry_run:
+        if current is None:
+            print("--dry-run 需要库里有已发布版本当基线，否则无法过闸")
+            return 1
+        baseline = [
+            CaseScore(case_id=str(c["case_id"]), passed=bool(c["passed"]))
+            for c in current.cases
+        ]
+
+    async def flow() -> int:
+        from .executor.candidates import collect_locator_candidates
+        from .executor.driver import execute
+
+        # 1) 先在真页面上跑一次，拿到「真实的失败」
+        async with launch_page(channel=args.channel) as page:
+            failed_run = await execute(skill, params, page, run_id="heal::probe")
+            if failed_run.ok:
+                print("这次运行是成功的，没有问题可修。")
+                return 0
+            failed_step = failed_run.failed_step()
+            print(f"探测运行失败：step {failed_step.step_id}（{failed_step.action}）"
+                  f" → {failed_step.failure_layer or failed_step.status}")
+            print(f"  {failed_step.detail}")
+            # 2) 从**失败时的这个页面**收集候选定位器
+            candidates = await collect_locator_candidates(page, skill)
+        if candidates:
+            print(f"候选定位器：{ {k: [c.key() for c in v] for k, v in candidates.items()} }")
+        else:
+            print("候选定位器：无（指纹也认不出来了）")
+
+        # 3) 每个候选补丁都要在 Golden Set 上过闸
+        async def golden_for(candidate_skill) -> list[CaseScore]:
+            scores: list[CaseScore] = []
+            for case in cases:
+                case_params = dict(case.params)
+                case_params.setdefault("start_url", args.start_url)
+                async with launch_page(channel=args.channel) as case_page:
+                    run = await execute(
+                        candidate_skill, case_params, case_page, run_id=f"heal::{case.case_id}"
+                    )
+                failed = run.failed_step()
+                scores.append(
+                    CaseScore(
+                        case.case_id,
+                        run.ok,
+                        (failed.detail or failed.status) if failed else "",
+                    )
+                )
+            return scores
+
+        result = await heal(
+            skill,
+            failed_run,
+            run_golden=golden_for,
+            store=None if args.dry_run else store,
+            baseline_scores=baseline if args.dry_run else None,
+            locator_candidates=candidates,
+            note="cli heal",
+        )
+
+        print("\n补丁尝试：")
+        for attempt in result.attempts:
+            mark = "收下" if attempt.accepted else ("试用" if attempt.applied else "跳过")
+            line = f"  [{mark}] {attempt.operator_id:18s}"
+            if attempt.applied:
+                line += f" 通过率 {attempt.rate:.2f}（{len(attempt.scores)} 条）"
+                if attempt.gate is not None and not attempt.gate.passed:
+                    line += " → 闸拒：" + "；".join(attempt.gate.reasons)[:80]
+                else:
+                    line += f" {attempt.detail}"
+            else:
+                line += f" {attempt.reason or attempt.detail}"
+            print(line)
+
+        if result.accepted:
+            where = "（dry-run，未落库）" if args.dry_run else f"并已发布 v{result.version}"
+            print(f"\n结果：补丁被收下{where}")
+            return 0
+        print("\n结果：未修复，需人工介入")
+        for reason in result.reasons[-1:]:
+            print(f"  {reason}")
+        return 1
+
+    try:
+        return asyncio.run(flow())
+    except Exception as exc:  # noqa: BLE001
+        print(f"heal 执行失败：{type(exc).__name__}: {str(exc)[:200]}")
+        print("如果报 EPERM / WinError 5 / No module named 'playwright'，"
+              "说明当前环境起不了浏览器，请在普通终端里跑并先装上 playwright。")
+        return 1
+
+
 def cmd_run_golden(args: argparse.Namespace) -> int:
     try:
         from .executor.playwright_page import launch_page
@@ -332,6 +441,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", required=True)
     p.add_argument("--channel", default="chrome")
     p.set_defaults(func=cmd_run_golden)
+
+    p = sub.add_parser("heal", help="失败 → 自动打补丁 → 过闸发布（需要真浏览器）")
+    p.add_argument("--store", required=True)
+    p.add_argument("--skill", required=True)
+    p.add_argument("--start-url", required=True)
+    p.add_argument(
+        "--params", default="", help="这次失败运行的入参 JSON；默认用第一条 Golden 用例"
+    )
+    p.add_argument("--channel", default="chrome")
+    p.add_argument("--dry-run", action="store_true", help="只试补丁、不落库")
+    p.set_defaults(func=cmd_heal)
 
     return parser
 

@@ -53,6 +53,7 @@ from skillforge.schema.types import (  # noqa: E402
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 V1_URL = (FIXTURES / "form_v1.html").as_uri()
 V2_URL = (FIXTURES / "form_v2.html").as_uri()
+V3_URL = (FIXTURES / "form_v3.html").as_uri()
 ENTITY_RE = r"R\-\d{6,}"
 
 _passed = 0
@@ -126,7 +127,7 @@ def prepare_skill(skill: Skill, start_url: str) -> Skill:
 # --------------------------------------------------------------------------- #
 # 主场景
 # --------------------------------------------------------------------------- #
-async def scenario(page) -> None:
+async def scenario(page, browser) -> None:
     print("\n[1] 录制两遍演示（真 Chrome）")
     trace_a = await record_demo(page, V1_URL, "张三", "500")
     trace_b = await record_demo(page, V1_URL, "李四", "800")
@@ -218,6 +219,44 @@ async def scenario(page) -> None:
     check("整次运行仍然成功", run_dup.ok)
     check("幂等键不是摆设（缺失则拒绝执行）", True, "见 test_executor.py 的 blocked 用例")
 
+    print("\n[9] heal 自动打补丁（真页面）")
+    from skillforge.executor.candidates import collect_locator_candidates
+    from skillforge.healer.patcher import heal
+    from skillforge.schema.models import CaseScore
+
+    heal_cases = [
+        ("c1", {"客户名称": "张三", "金额": "500"}),
+        ("c2", {"客户名称": "李四", "金额": "800"}),
+        ("c3", {"客户名称": "王五", "金额": "100"}),
+    ]
+
+    # 9a. 纯文案改版：指纹救不了 —— 这是诚实的边界，不是 bug
+    run_broken_v2 = await execute(skill, v2_params, pw, run_id="real-heal-v2")
+    check("旧版在改版页上失败", not run_broken_v2.ok)
+    cand_v2 = await collect_locator_candidates(pw, skill)
+    check(
+        "纯文案改版收集不到候选（指纹也认不出）",
+        all(s.step_id not in cand_v2 for s in skill.steps if s.assertion is not None),
+        f"候选步骤={sorted(cand_v2)} —— 按钮文字变了，文字类特征全废",
+    )
+
+    # 9b. id/结构变了但文案没变：运行时指纹兜底自己就修好了，不需要补丁
+    css_skill = copy.deepcopy(skill)
+    css_skill.version = "1.0.0-css"
+    css_skill.steps[-1].target = Locator(css="#submit")  # v3 里这个 id 被改了
+    await page.goto(V3_URL, wait_until="domcontentloaded")
+    run_v3 = await execute(
+        css_skill,
+        {"客户名称": "张三", "金额": "500", "start_url": V3_URL},
+        pw,
+        run_id="real-heal-v3",
+    )
+    check("id 改版：运行时指纹兜底自动修好（不需要打补丁）", run_v3.ok,
+          str(run_v3.failed_step().detail) if not run_v3.ok else "")
+    check("并且被标记为 healed_locator", run_v3.steps[-1].healed_locator is True,
+          str(run_v3.steps[-1].detail))
+    check("既然没失败，就没有补丁要打", run_v3.failed_step() is None)
+
 
 async def main_async() -> int:
     from playwright.async_api import async_playwright
@@ -226,7 +265,7 @@ async def main_async() -> int:
         browser = await p.chromium.launch(channel="chrome", headless=True)
         try:
             page = await browser.new_page()
-            await scenario(page)
+            await scenario(page, browser)
         finally:
             await browser.close()
     return 0

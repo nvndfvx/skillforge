@@ -1,4 +1,4 @@
-# SkillForge
+﻿# SkillForge
 
 **看着人干一遍 → 蒸馏成一个技能 → 沙箱执行 → 坏了自己修 → 越用越准。**
 
@@ -14,7 +14,7 @@
 
 | | |
 |---|---|
-| 离线测试 | **90 个**，零第三方依赖（`python tests/run_all.py`） |
+| 离线测试 | **91 个**，零第三方依赖（`python tests/run_all.py`） |
 | 真浏览器检查 | **22 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
 | 闭环 | 录制 → 对齐 → 编译 → 人审三道勾 → Golden 跑批 → 过闸发布 → **自动打补丁** → 回滚 |
 | 还缺 | 批次/灰度、人审 UI |
@@ -22,7 +22,7 @@
 ## 快速开始（离线，不需要浏览器）
 
 ```bash
-python tests/run_all.py          # 90 个离线测试
+python tests/run_all.py          # 91 个离线测试
 python examples/demo_loop.py     # 端到端闭环演示（FakePage）
 python examples/demo_heal.py     # 自动打补丁 + Golden Set 扩到 10 条
 ```
@@ -56,6 +56,10 @@ python -m skillforge release --store ./store --skill skill.json --scores scores.
 # 6. 回滚
 python -m skillforge rollback --store ./store --skill-id expense
 python -m skillforge status   --store ./store --skill-id expense
+
+# 7. 失败 → 自动打补丁 → 过闸发布（需要真浏览器）
+python -m skillforge heal --store ./store --skill skill.json \
+    --start-url "file:///path/to/form.html"          # 加 --dry-run 只试不落库
 ```
 
 ## 架构
@@ -517,6 +521,26 @@ technical 断言本来没有 target，`from_dict` 把它变成了 `Locator()`，
 
 **关键在第一轮**：它试了、被拒了、库里什么都没变。这才是"自动自愈"该有的样子——
 不是"AI 改了对不对都算数"。
+
+CLI 也有了：`python -m skillforge heal --store ... --skill ... --start-url ...`
+（`--dry-run` 只试不落库）。
+
+### 6.1.1 真浏览器上发现的一个反直觉结论：`swap_locator` 的用武之地很窄
+
+| 指纹相似度 | 会发生什么 |
+|---|---|
+| **≥ 0.75** | 运行时兜底（`resolve_locator`）自己就换好了，**根本不会失败**，也就没补丁可打 |
+| 0.5 – 0.75 | 运行时兜不住，但能收集到候选 → `swap_locator` 才有用 |
+| **< 0.5** | 候选都收不到 → 只能人给新定位器 |
+
+真 Chrome 实测（`tests/test_real_browser.py` 第 9 节）：
+
+- 按钮 id 从 `submit` 改成 `submit-v2`（**文案不变**）→ 相似度 **1.00**，运行时直接兜住，标记 `healed_locator`，**没失败**
+- 按钮文案从「提交」改成「确认保存」→ 相似度掉到 **0.5 以下**，文字类特征全废，候选为空，**自动补丁修不了**
+
+> 结论：**真正有价值的自动算子是 `add_wait` 和 `drop_optional_step`**，
+> `swap_locator` 大部分时候被运行时兜底抢先了。这个算子留着，
+> 但别把它当成自动自愈的主力 —— 这是设计时想当然了，靠真浏览器才看清。
 
 ### 6.2 Golden Set 扩到 10 条（并纠正一个我自己的说法）
 
