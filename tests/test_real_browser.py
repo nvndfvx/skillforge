@@ -19,6 +19,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# Windows 控制台默认不是 UTF-8（CI 上是 cp1252），下面会打印中文 SKIP 提示，
+# 不强制 UTF-8 会直接 UnicodeEncodeError 崩掉，把「没装浏览器」伪装成测试失败。
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
 # 让「装了 vendor 就能直接跑」，不依赖外部 PYTHONPATH
 VENDOR = ROOT / "vendor"
 if VENDOR.is_dir():

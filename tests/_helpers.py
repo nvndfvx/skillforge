@@ -11,9 +11,18 @@
 from __future__ import annotations
 
 import contextlib
+import sys
 import uuid
 from pathlib import Path
 from typing import Iterator
+
+# Windows 控制台默认不是 UTF-8（CI 上是 cp1252），打印中文会抛 UnicodeEncodeError。
+# 导入本模块的测试自动获得 UTF-8 stdout。
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 ROOT = Path(__file__).resolve().parent.parent
 _TMP_ROOT = ROOT / ".tmp"

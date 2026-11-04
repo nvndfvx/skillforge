@@ -1,4 +1,4 @@
-"""离线测试：表单快照补录（H4）/ 蒸馏器 / 实体正则。
+﻿"""离线测试：表单快照补录（H4）/ 蒸馏器 / 实体正则。
 
 不依赖浏览器：
     python tests/test_compiler.py
@@ -9,6 +9,13 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Windows CI 的 stdout 是 cp1252，本文件失败时会打印中文断言信息 ——
+# 不强制 UTF-8 会 UnicodeEncodeError，把真正的失败盖成编码错误。
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 from skillforge.compiler.distiller import distill, entity_regex, infer_type  # noqa: E402
 from skillforge.observer.aligner import align_actions  # noqa: E402

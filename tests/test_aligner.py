@@ -1,4 +1,4 @@
-"""离线测试：对齐器 / 单调性闸 / 幂等约束 / 断言分级。
+﻿"""离线测试：对齐器 / 单调性闸 / 幂等约束 / 断言分级。
 
 不依赖浏览器与 playwright，纯 stdlib 可跑：
     python tests/test_aligner.py
@@ -11,6 +11,13 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Windows CI 的 stdout 是 cp1252，本文件失败时会打印中文断言信息 ——
+# 不强制 UTF-8 会 UnicodeEncodeError，把真正的失败盖成编码错误。
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 from skillforge.observer.aligner import align_actions  # noqa: E402
 from skillforge.observer.recorder import infer_write_effect  # noqa: E402

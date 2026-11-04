@@ -1,4 +1,4 @@
-"""离线测试：执行器 / 幂等门 / 断言求值 / 三层定位 / Golden 跑批。
+﻿"""离线测试：执行器 / 幂等门 / 断言求值 / 三层定位 / Golden 跑批。
 
 全部用 FakePage，不需要浏览器：
     python tests/test_executor.py
@@ -10,6 +10,13 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Windows CI 的 stdout 是 cp1252，本文件失败时会打印中文断言信息 ——
+# 不强制 UTF-8 会 UnicodeEncodeError，把真正的失败盖成编码错误。
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 from skillforge.executor.driver import execute, render  # noqa: E402
 from skillforge.golden.runner import evaluate_gate, run_golden  # noqa: E402
