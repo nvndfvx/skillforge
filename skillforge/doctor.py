@@ -170,6 +170,11 @@ def run_checks(*, channel: str = "chrome", deep: bool = True) -> list[Check]:
 
 SYMBOL = {OK: "[x]", WARN: "[!]", FAIL: "[ ]"}
 
+HEADER = (
+    "SkillForge 环境自检\n"
+    "（下面每一行都是**程序打印的**，不用照着敲；要敲的命令都带 skillforge 前缀）"
+)
+
 
 def format_checks(checks: list[Check]) -> str:
     lines = []

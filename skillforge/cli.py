@@ -1,4 +1,4 @@
-"""命令行入口：把闭环的每一段变成可执行命令。
+﻿"""命令行入口：把闭环的每一段变成可执行命令。
 
     python -m skillforge compile  --trace-a a.json --trace-b b.json --out skill.json
     python -m skillforge review   --skill skill.json --steps-reviewed --confirm-assertions --precheck "R-\\d{6,}"
@@ -374,9 +374,9 @@ def cmd_signals(args: argparse.Namespace) -> int:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     """环境自检：把每一环拆开验，说清哪一环没通、该怎么办。"""
-    from .doctor import FAIL, format_checks, run_checks, worst
+    from .doctor import FAIL, HEADER, format_checks, run_checks, worst
 
-    print("SkillForge 环境自检\n")
+    print(HEADER + "\n")
     checks = run_checks(channel=args.channel, deep=not args.shallow)
     print(format_checks(checks))
     level = worst(checks)
