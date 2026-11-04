@@ -2,6 +2,29 @@
 
 本文件记录每个版本做了什么。版本号在 `skillforge/__init__.py`，**单一来源**。
 
+## v0.7.0
+
+新能力：
+
+- **CLI 执行域**（`domain: "cli"`）：技能跑在命令行上，动作只有 `run`（命令模板），
+  断言打在 `stdout + stderr` 上。复用同一套断言求值、失败分层、幂等门与回归闸。
+  - 幂等门在 CLI 域的等价物是 `precheck_command`（返回 0 表示已存在 → 跳过）；
+    没有它写操作直接 `blocked`，和浏览器域"没 precheck 就不许写"是同一条底线
+  - `skillforge run` 按 `domain` 自动分派 browser(playwright) / cli(子进程)
+- **桌面 GUI 明确不支持**（这是决定，不是没做完）：控件树比 DOM 脆一个数量级，
+  桌面能拿到的业务证据也太弱（截图像素/窗口标题撑不起判据）。
+  硬做只会多一个会骗人的域 —— 正确做法是把那软件的 API/命令行包成 CLI 域。
+
+修复（审计出来的三个真问题）：
+
+- **CLI 域接不进闸**：`run-golden` / `batch` 写死走 playwright，CLI 技能跑批直接报错，
+  等于"越用越准"这个核心承诺对 CLI 域失效。现在 `run_golden` / `run_batch` 接受
+  `runner`，不需要页面的域也能进闸；两个都没给时明确 `ValueError`，不静默跑空。
+- **Windows 命令输出乱码**：原来无条件按 UTF-8 解，Windows 上老工具吐 GBK/CP437
+  会被替换成乱码，断言可能因此**误判**（看着跑过了其实判定错）。
+  改成先 UTF-8，失败退系统区域编码。
+- 补测试：`domain` / `precheck_command` 的序列化往返、CLI 域过闸且能被单点翻转拦住。
+
 ## v0.6.1
 
 - **分发包改名 `skillforge-engine`**：PyPI 上 `skillforge` 已被别人占用（v1.2.0）。
