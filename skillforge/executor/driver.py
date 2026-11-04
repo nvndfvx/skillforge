@@ -229,6 +229,34 @@ async def run_step(step: Step, params: Mapping[str, Any], page: PageAdapter) -> 
         if not outcome.passed:
             result.technical_failures.append(f"{outcome.assertion_id}: {outcome.detail}")
 
+    # 4.5) 跨页关联：这个标签页里必须真出现你要求的那个业务实体。
+    # 少了这一层，点错行/审错单子照样"提交成功"，断言照样通过 —— 稳定地把事做错。
+    check = getattr(step, "entity_check", None)
+    if check is not None:
+        expected = params.get(check.param)
+        if expected in (None, ""):
+            result.status = "failed"
+            result.failure_layer = "param"
+            result.detail = f"跨页关联检查缺参数「{check.param}」：无法证明停在了正确的记录上"
+            return result
+        try:
+            page_text = await page.text()
+        except Exception:  # noqa: BLE001
+            page_text = ""
+        try:
+            found = set(re.findall(check.pattern, page_text or ""))
+        except re.error as exc:
+            result.status = "failed"
+            result.failure_layer = "assertion"
+            result.detail = f"关联性断言的正则写错了：{exc}"
+            return result
+        if str(expected) not in found:
+            sample = "、".join(sorted(found)[:3]) if found else "一个都没有"
+            result.business_failures.append(
+                f"entity[{check.param}]: 当前页面（标签页 {getattr(step, 'tab', 0)}）里没有「{expected}」，"
+                f"找到的是 {sample} —— 停在了别的记录上，不能继续操作"
+            )
+
     if result.business_failures:
         result.status = "failed"
         result.failure_layer = "assertion"

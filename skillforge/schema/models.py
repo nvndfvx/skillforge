@@ -100,12 +100,35 @@ class Assertion:
 # 步骤
 # --------------------------------------------------------------------------- #
 @dataclass
+class EntityCheck:
+    """跨页关联：确认**这个标签页里确实是你要求的那个业务实体**。
+
+    为什么必须单独有它：多标签能记录"在第几页操作"，但记不住"这一页是不是
+    你说的那一条记录"。少了这一层，就会出现最危险的情形 —— 点错了行、
+    审错了单子，而页面上"提交成功"照样出现，断言照样通过。
+    那是设计里的天花板一：稳定地把事做错。
+
+    pattern 是实体号在页面上的形态（如 r"R-\\d{8}"），param 是技能入参名。
+    执行时：页面文本里必须能找到 params[param] 这个值的匹配，否则业务失败。
+    """
+
+    pattern: str
+    param: str
+    note: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"pattern": self.pattern, "param": self.param, "note": self.note}
+
+
+@dataclass
 class Step:
     step_id: int
     action: ActionKind
     target: Locator
     # 这一步在哪个标签页执行：0=初始页，1,2…=之前某个 click 点开后新出现的标签页
     tab: int = 0
+    # 跨页关联：这一步所在的页面必须证明它是 params[param] 那条记录
+    entity_check: EntityCheck | None = None
     value: Any = None
     write_effect: WriteEffect = WriteEffect.NONE
     idempotency_key: str | None = None
@@ -185,6 +208,7 @@ class Step:
             "action": self.action.value,
             "target": self.target.to_dict(),
             "tab": self.tab,
+            "entity_check": self.entity_check.to_dict() if self.entity_check else None,
             "value": self.value,
             "write_effect": self.write_effect.value,
             "idempotency_key": self.idempotency_key,

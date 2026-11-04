@@ -9,6 +9,7 @@ from typing import Any
 
 from .models import (
     Assertion,
+    EntityCheck,
     GoldenCase,
     Parameter,
     Precondition,
@@ -100,12 +101,23 @@ def precondition_from_dict(data: Any) -> Precondition:
     )
 
 
+def entity_check_from_dict(data: Any) -> EntityCheck | None:
+    if not isinstance(data, dict):
+        return None
+    pattern = str(data.get("pattern") or "").strip()
+    param = str(data.get("param") or "").strip()
+    if not pattern or not param:
+        return None
+    return EntityCheck(pattern=pattern, param=param, note=str(data.get("note") or ""))
+
+
 def step_from_dict(data: Any) -> Step:
     return Step(
         step_id=int(_get(data, "step_id") or 0),
         action=ActionKind(str(_get(data, "action") or "click")),
         target=locator_from_dict(_get(data, "target")),
         tab=int(_get(data, "tab") or 0),
+        entity_check=entity_check_from_dict(_get(data, "entity_check")),
         value=_get(data, "value"),
         write_effect=WriteEffect(str(_get(data, "write_effect") or "none")),
         idempotency_key=_get(data, "idempotency_key"),

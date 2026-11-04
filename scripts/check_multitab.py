@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / "vendor"))
 from skillforge.executor.driver import execute  # noqa: E402
 from skillforge.executor.playwright_page import launch_page  # noqa: E402
 from skillforge.observer.recorder import TraceRecorder  # noqa: E402
-from skillforge.schema.models import Assertion, Parameter, Skill, Step  # noqa: E402
+from skillforge.schema.models import Assertion, EntityCheck, Parameter, Skill, Step  # noqa: E402
 from skillforge.schema.types import (  # noqa: E402
     ActionKind,
     AnchorKind,
@@ -93,6 +93,39 @@ async def run_multi_tab() -> bool:
     return run.ok
 
 
+async def check_entity_mismatch() -> bool:
+    """关键验证：给的实体号与页面不符时，必须是业务失败（判死），不是"还行"。"""
+    skill = make_skill()
+    # 页面是 form_v1（详情），让入参要求 R-20240115 —— 页面上只有 R-20240116 那种号
+    skill.steps[2].entity_check = EntityCheck(pattern=r"R-\d{8}", param="任务号")
+    skill.parameters.append(Parameter(name="任务号", type="string"))
+
+    async with launch_page(channel="chrome", headless=True) as page:
+        bad = await execute(skill, {"客户名称": "张三", "任务号": "R-99999999"}, page, run_id="bad")
+
+    detail = bad.steps[-1].detail if bad.steps else ""
+    print(f"  传入不存在的任务号 → ok={bad.ok}  detail={detail[:90]}")
+    return not bad.ok and "R-99999999" in detail
+
+
+async def check_entity_match() -> bool:
+    """反向验证：实体号真的在页面上时，不能误报。
+
+    挂在 tab 0（列表页）：列表页上确实印着 "R-20240115"。
+    """
+    skill = make_skill()
+    skill.steps[1].entity_check = EntityCheck(pattern=r"R-\d{8}", param="任务号")
+    skill.parameters.append(Parameter(name="任务号", type="string"))
+
+    async with launch_page(channel="chrome", headless=True) as page:
+        good = await execute(
+            skill, {"客户名称": "张三", "任务号": "R-20240115"}, page, run_id="good"
+        )
+
+    print(f"  传入列表页上真实存在的任务号 → ok={good.ok}")
+    return good.ok
+
+
 async def main() -> int:
     print("== 1) 多标签录制 ==")
     tabs = await record_multi_tab()
@@ -110,7 +143,19 @@ async def main() -> int:
         return 1
     print("   OK step.tab=1 落在了新标签页")
 
-    print("\n全部通过：录制和执行都能跨标签页。")
+    print("\n== 3) 跨页关联：点错记录必须判死 ==")
+    if not await check_entity_mismatch():
+        print("FAIL 实体号不符时没有判业务失败（会稳定地把事做错）")
+        return 1
+    print("   OK 实体号不符 → 业务失败")
+
+    print("\n== 4) 跨页关联：相符时不能误报 ==")
+    if not await check_entity_match():
+        print("FAIL 实体号相符却报了失败（误报）")
+        return 1
+    print("   OK 实体号相符 → 通过")
+
+    print("\n全部通过：多标签录制/执行 + 跨页关联判据都成立。")
     return 0
 
 

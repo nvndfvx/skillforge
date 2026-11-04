@@ -306,6 +306,16 @@ def distill(
         ],
     }
 
+    # 跨页步骤必须能自证"停的是哪条记录"，否则点错行也会显示提交成功
+    cross_tab = [s for s in steps if int(getattr(s, "tab", 0) or 0) > 0]
+    if cross_tab:
+        missing = [s.step_id for s in cross_tab if s.entity_check is None]
+        if missing:
+            warnings.append(
+                f"跨页步骤 {missing} 没有关联性断言（entity_check）："
+                "跑批时无法证明点开的是同一条记录，人审必须补上（给出实体号形态 + 用哪个参数比对）。"
+            )
+
     skill = Skill(
         skill_id=skill_id,
         name=name or skill_id,
