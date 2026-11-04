@@ -1,4 +1,4 @@
-﻿# SkillForge
+# SkillForge
 
 **看着人干一遍 → 蒸馏成一个技能 → 沙箱执行 → 坏了自己修 → 越用越准。**
 
@@ -14,15 +14,15 @@
 
 | | |
 |---|---|
-| 离线测试 | **91 个**，零第三方依赖（`python tests/run_all.py`） |
-| 真浏览器检查 | **22 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
+| 离线测试 | **98 个**，零第三方依赖（`python tests/run_all.py`） |
+| 真浏览器检查 | **27 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
 | 闭环 | 录制 → 对齐 → 编译 → 人审三道勾 → Golden 跑批 → 过闸发布 → **自动打补丁** → 回滚 |
 | 还缺 | 批次/灰度、人审 UI |
 
 ## 快速开始（离线，不需要浏览器）
 
 ```bash
-python tests/run_all.py          # 91 个离线测试
+python tests/run_all.py          # 98 个离线测试
 python examples/demo_loop.py     # 端到端闭环演示（FakePage）
 python examples/demo_heal.py     # 自动打补丁 + Golden Set 扩到 10 条
 ```
@@ -60,6 +60,10 @@ python -m skillforge status   --store ./store --skill-id expense
 # 7. 失败 → 自动打补丁 → 过闸发布（需要真浏览器）
 python -m skillforge heal --store ./store --skill skill.json \
     --start-url "file:///path/to/form.html"          # 加 --dry-run 只试不落库
+
+# 8. 看 technical 探针的连续失败（H14：只喊，不改技能）
+python -m skillforge signals --store ./store --skill-id expense
+python -m skillforge signals --store ./store --skill-id expense --reset   # 人工确认后清零
 ```
 
 ## 架构
@@ -193,6 +197,7 @@ skillforge/
 │   ├── runner.py      Golden 跑批 + 单调性闸接线
 │   └── suggest.py     从参数生成候选用例（origin=manual_edge，需人确认）
 ├── registry.py        版本库：发布闸（GateRejected）、回滚、Golden Set 只增不删
+├── signals.py         technical 探针的连续失败累积告警（H14，只喊不改）
 ├── cli.py             命令行（compile / review / golden / release / rollback / status / run-golden）
 ├── testing.py         FakePage（tests 与 examples 共用）
 ├── scripts/
@@ -204,13 +209,15 @@ skillforge/
 ├── docs/
 │   └── design-v3.md   设计定稿（7 条硬约束、两个天花板、MVP 验收 14 条）
 └── tests/
-    ├── fixtures/      真实浏览器用的两个页面（v1 / v2 改版）
+    ├── fixtures/      真实浏览器用的三个页面（v1 / v2 文案改版 / v3 id 改版）
     ├── run_all.py     一次跑完所有离线测试
     ├── test_aligner.py
     ├── test_compiler.py
     ├── test_executor.py
     ├── test_js_capture.py
     ├── test_registry.py
+    ├── test_healer.py
+    ├── test_signals.py
     ├── test_cli.py
     └── test_real_browser.py
 ```
@@ -568,6 +575,26 @@ CLI 也有了：`python -m skillforge heal --store ... --skill ... --start-url .
 > 所以扩 Golden Set 的正确理由是：**你想要的用例得先存在，闸才能拦住它。**
 > 分辨率是顺带的。
 
+### 6.3 technical 探针的累积告警（H14）
+
+单次 technical 失败**不判死**是对的——它只是环境探针。但同一个探针连续响 20 次，
+说明环境真变了，之前却没有任何机制喊一声。
+
+`skillforge/signals.py` 把它补上：按断言累计连续失败次数，落盘到
+`<store>/<skill_id>/signals.json`。
+
+- 连续失败 ≥ `threshold`（默认 5）→ **升格**，只在跨过阈值那一次报一次
+- 成功一次 → 计数清零，并清掉升格标记（复发能重新升格）
+- **只升格、不自动改技能** —— 这里只负责喊，人是最后一道闸
+
+```bash
+python -m skillforge signals --store ./store --skill-id expense            # 看
+python -m skillforge signals --store ./store --skill-id expense --reset     # 人工确认后清零
+```
+
+`run-golden` 和 `heal` 会自动喂信号；`--fail-on-escalated` 可以接 CI，
+让"探针持续响"变成构建失败。
+
 ---
 
 ## 还没做的
@@ -576,11 +603,10 @@ CLI 也有了：`python -m skillforge heal --store ... --skill ... --start-url .
 2. **人审 UI**：`review_checklist()` 是数据结构 + CLI 参数，缺一个能点选打勾的界面
 3. **写操作的精确匹配**：现在靠"唯一命中"兜住子串匹配的坑；
    更彻底的做法是给 `Locator` 加 `exact` 模式，读操作宽、写操作严
-4. **H14**：technical 断言失败没有累积告警，连续 N 次应升格成 `fragile` 事件
-5. **heal 接进 CLI**：现在自动打补丁是库 API（`healer.heal`），还没变成 `skillforge heal` 命令
-   —— 因为它需要一个活着的浏览器来收集候选定位器
+4. **`heal` 的 CLI 胶水没在真浏览器上端到端跑过**：解析器和空集守卫有离线测试，
+   底下的 heal 路径在真 Chrome 上验过，但那条命令行本身还没跑过
 
-**下一步建议做 5**：把 `heal` 接成 CLI 命令（复用 `run-golden` 那套浏览器启动），
-这样"失败 → 自动修 → 过闸发布"就是一条命令行，而不是一段代码。
+**下一步建议**：把 Golden Set 真扩到一个业务技能的 10+ 条（现在 demo 用的是合成用例），
+然后跑一周看 `signals.json` 里到底会不会响 —— **真实数据比任何 demo 都能说明问题。**
 
 

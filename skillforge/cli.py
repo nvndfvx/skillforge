@@ -26,6 +26,7 @@ from .registry import GateRejected, SkillStore, load_skill, save_skill
 from .schema.models import Assertion, CaseScore, GoldenCase
 from .schema.serde import raw_trace_from_dict
 from .schema.types import AnchorKind, AssertionKind
+from .signals import SignalBook
 
 
 # --------------------------------------------------------------------------- #
@@ -61,6 +62,15 @@ def _print_list(title: str, items: Sequence[str]) -> None:
     print(f"{title}：")
     for item in items:
         print(f"  - {item}")
+
+
+def _print_escalations(escalated: Sequence[Any]) -> None:
+    if not escalated:
+        return
+    print("\n⚠ technical 探针连续失败已升格（环境可能真的变了）：")
+    for rec in escalated:
+        print(f"  {rec.assertion_id}  连续 {rec.consecutive} 次  {rec.last_detail[:80]}")
+    print("  建议：先确认环境是否变更，别急着改技能；确认后 python -m skillforge signals --reset")
 
 
 # --------------------------------------------------------------------------- #
@@ -220,6 +230,24 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_signals(args: argparse.Namespace) -> int:
+    """H14：看 technical 探针的连续失败情况（只喊，不改技能）。"""
+    store = SkillStore(args.store)
+    book = SignalBook(store.root, threshold=args.threshold)
+
+    if args.reset:
+        count = book.reset(args.skill_id, args.assertion or None)
+        print(f"已清零 {count} 条信号")
+        return 0
+
+    report = book.report(args.skill_id)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if report["escalated"]:
+        print(f"\n⚠ {len(report['escalated'])} 条探针已升格：环境可能真的变了。")
+        return 1 if args.fail_on_escalated else 0
+    return 0
+
+
 def cmd_heal(args: argparse.Namespace) -> int:
     """失败 → 三层定位 → 自动打补丁 → 过闸发布（或转人工）。"""
     from .executor.playwright_page import launch_page
@@ -250,9 +278,13 @@ def cmd_heal(args: argparse.Namespace) -> int:
         from .executor.candidates import collect_locator_candidates
         from .executor.driver import execute
 
+        book = SignalBook(store.root, threshold=args.signal_threshold)
+
         # 1) 先在真页面上跑一次，拿到「真实的失败」
         async with launch_page(channel=args.channel) as page:
             failed_run = await execute(skill, params, page, run_id="heal::probe")
+            # H14：探测运行也计入探针信号
+            _print_escalations(book.record_run(skill, failed_run))
             if failed_run.ok:
                 print("这次运行是成功的，没有问题可修。")
                 return 0
@@ -346,12 +378,15 @@ def cmd_run_golden(args: argparse.Namespace) -> int:
     async def run_all() -> list[dict[str, Any]]:
         from .executor.driver import execute
 
+        book = SignalBook(store.root, threshold=args.threshold)
         results: list[dict[str, Any]] = []
+        escalated: list[Any] = []
         for case in cases:
             params = dict(case.params)
             params.setdefault("start_url", args.start_url)
             async with launch_page(channel=args.channel) as page:
                 run = await execute(skill, params, page, run_id=f"golden::{case.case_id}")
+            escalated.extend(book.record_run(skill, run))
             failed = run.failed_step()
             results.append(
                 {
@@ -360,6 +395,7 @@ def cmd_run_golden(args: argparse.Namespace) -> int:
                     "detail": (failed.detail or failed.status) if failed else "",
                 }
             )
+        _print_escalations(escalated)
         return results
 
     try:
@@ -440,6 +476,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--start-url", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--channel", default="chrome")
+    p.add_argument("--threshold", type=int, default=5,
+                   help="technical 探针连续失败多少次升格告警")
     p.set_defaults(func=cmd_run_golden)
 
     p = sub.add_parser("heal", help="失败 → 自动打补丁 → 过闸发布（需要真浏览器）")
@@ -451,7 +489,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--channel", default="chrome")
     p.add_argument("--dry-run", action="store_true", help="只试补丁、不落库")
+    p.add_argument("--signal-threshold", type=int, default=5,
+                   help="technical 探针连续失败多少次升格告警")
     p.set_defaults(func=cmd_heal)
+
+    p = sub.add_parser("signals", help="看 technical 探针的连续失败（H14，只喊不改）")
+    p.add_argument("--store", required=True)
+    p.add_argument("--skill-id", required=True)
+    p.add_argument("--threshold", type=int, default=5)
+    p.add_argument("--reset", action="store_true", help="人工确认后清零")
+    p.add_argument("--assertion", default="", help="只清某一条信号")
+    p.add_argument("--fail-on-escalated", action="store_true",
+                   help="有升格信号时返回非零（方便接 CI）")
+    p.set_defaults(func=cmd_signals)
 
     return parser
 
