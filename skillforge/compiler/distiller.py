@@ -1,4 +1,4 @@
-"""蒸馏器：对齐报告 → Skill 草稿。
+﻿"""蒸馏器：对齐报告 → Skill 草稿。
 
 职责边界（刻意克制）：
   - 只做「确定性的转换」：变量→参数、动作→步骤、指纹→定位器、写副作用打标。
@@ -14,6 +14,7 @@ from typing import Any, Sequence
 from ..observer.aligner import AlignmentReport
 from ..observer.recorder import infer_write_effect
 from ..schema.models import (
+    EntityCheck,
     Assertion,
     Parameter,
     Precondition,
@@ -118,6 +119,79 @@ def _template(name: str) -> str:
 # --------------------------------------------------------------------------- #
 # 主流程
 # --------------------------------------------------------------------------- #
+# 业务实体号在真实系统里的常见形态。宁可多抓一种，也不要漏。
+ID_SHAPES: tuple[str, ...] = (
+    r"[A-Z]{1,5}[-_]?\d{4,}",                      # R-20247710 / TASK_12345
+    r"\d{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}",        # 类 UUID 前缀
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+    r"\b\d{6,}\b",                                  # 纯长数字
+)
+
+
+def id_token(text: str) -> str:
+    """从一段文本里揪出"像业务实体号"的那一段。"""
+    for shape in ID_SHAPES:
+        match = re.search(shape, text or "")
+        if match:
+            return match.group(0)
+    return ""
+
+
+def infer_entity_checks(
+    steps: list[Step], param_examples: dict[str, str], warnings: list[str]
+) -> int:
+    """给跨标签页的步骤自动补上「关联性断言」。
+
+    逻辑（只用录制里已有的证据，不猜业务规则）：
+    1. 这个步骤在 tab>0（点开的新页面）
+    2. 找到点开它的那一步 click，取出被点元素名字里的实体号（如「任务 R-20240115 待审核」→ R-20240115）
+    3. 看有没有哪个参数的值也是这个形态 —— 有就挂上：运行时"我传的是 R-xxx，这一页必须是 R-xxx"
+    4. 找不到参数就不硬凑（生成了假判据比没有更糟），只给警告要人审补
+
+    返回补上的条数。
+    """
+    added = 0
+    for index, step in enumerate(steps):
+        if int(getattr(step, "tab", 0) or 0) == 0 or step.entity_check is not None:
+            continue
+
+        opener = None
+        for prev in reversed(steps[:index]):
+            if (
+                int(getattr(prev, "tab", 0) or 0) < int(step.tab or 0)
+                and prev.action is ActionKind.CLICK
+            ):
+                opener = prev
+                break
+        if opener is None:
+            continue
+
+        token = id_token(opener.target.name or "") or id_token(str(opener.value or ""))
+        if not token:
+            warnings.append(
+                f"step {step.step_id} 是点开新页面后的动作，但点开它的元素名字里"
+                "看不出业务实体号（如单号/任务号）—— 关联断言没生成，人审要补。"
+            )
+            continue
+
+        pattern = entity_regex(token)
+        matched = [name for name, example in param_examples.items() if re.search(pattern, example or "")]
+        if len(matched) == 1:
+            step.entity_check = EntityCheck(
+                pattern=pattern,
+                param=matched[0],
+                note=f"自动推断：由「{token}」同形匹配到参数「{matched[0]}」",
+            )
+            added += 1
+        else:
+            hint = "多个参数都像" if matched else "没有任何参数带着这个实体号"
+            warnings.append(
+                f"step {step.step_id} 打开了「{opener.target.name}」，实体号形如「{token}」，"
+                f"但{hint} —— 关联断言没生成（宁可没有也不放假判据），人审要补上。"
+            )
+    return added
+
+
 def distill(
     report: AlignmentReport,
     actions_a: Sequence[RawAction],
@@ -309,7 +383,15 @@ def distill(
     # 跨页步骤必须能自证"停的是哪条记录"，否则点错行也会显示提交成功
     cross_tab = [s for s in steps if int(getattr(s, "tab", 0) or 0) > 0]
     if cross_tab:
-        missing = [s.step_id for s in cross_tab if s.entity_check is None]
+        # 先用录制里的证据自动补（能推出来就不用麻烦人）
+        param_examples = {name: str(example) for name, example in var_by_step.values()}
+        added = infer_entity_checks(steps, param_examples, warnings)
+        if added:
+            warnings.append(
+                f"已自动为 {added} 个跨页步骤生成关联断言（同形实体号 + 参数匹配）。"
+                "人审请确认：这些步骤确实只应作用于该实体号的记录。"
+            )
+        missing = [s.step_id for s in steps if int(getattr(s, "tab", 0) or 0) > 0 and s.entity_check is None]
         if missing:
             warnings.append(
                 f"跨页步骤 {missing} 没有关联性断言（entity_check）："
