@@ -156,6 +156,59 @@ def test_by_version_ignores_skipped():
     assert report.by_version() == {"1.0.0": {"ok": 1, "fail": 0}}, "跳过的不能进灰度样本"
 
 
+def test_param_mode_is_sticky_per_user():
+    """按参数分流：同一个用户的多张单必须落在同一个版本。"""
+    state = CanaryState(
+        skill_id="expense", candidate_version="1.1.0", weight=0.5,
+        mode="param", field="客户编号",
+    )
+    for uid in ("U1", "U2", "U3", "U4", "U5"):
+        answers = {state.routes(f"item-{i}", {"客户编号": uid}) for i in range(10)}
+        assert len(answers) == 1, f"用户 {uid} 的单被分到了两个版本"
+
+    decisions = {state.routes("x", {"客户编号": f"U{i}"}) for i in range(40)}
+    assert decisions == {True, False}, "不同用户之间应该分化"
+
+
+def test_segment_mode_only_whitelisted():
+    """分群模式：只放行白名单，100%，不看 weight。"""
+    state = CanaryState(
+        skill_id="expense", candidate_version="1.1.0",
+        mode="segment", field="租户", segments=["A公司", "B公司"],
+    )
+    assert state.routes("i1", {"租户": "A公司"})
+    assert state.routes("i1", {"租户": "B公司"})
+    assert not state.routes("i1", {"租户": "C公司"})
+    assert state.actual_weight(["A公司", "C公司"]) == 0.5
+    assert "只放行" in state.describe()
+
+
+def test_missing_param_falls_back_to_item_id():
+    """缺参数不能崩，也不能悄悄退化成全 0% / 全 100%。"""
+    state = CanaryState(
+        skill_id="expense", candidate_version="1.1.0", weight=0.5,
+        mode="param", field="客户编号",
+    )
+    assert state.route_key("item-7", {}) == "item-7"
+    assert state.route_key("item-7", {"客户编号": None}) == "item-7"
+    assert state.route_key("item-7", {"客户编号": ""}) == "item-7"
+    assert state.route_key("item-7", {"客户编号": "U9"}) == "U9"
+    # 退回 item_id 之后仍然确定
+    assert state.routes("item-7", {}) == state.routes("item-7", {})
+
+
+def test_modes_survive_roundtrip():
+    state = CanaryState(
+        skill_id="expense", candidate_version="1.1.0",
+        mode="segment", field="租户", segments=["A", "B"],
+    )
+    again = CanaryState.from_dict(state.to_dict())
+    assert again.mode == "segment"
+    assert again.field == "租户"
+    assert again.segments == ["A", "B"]
+    assert again.routes("i", {"租户": "A"})
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failures = 0

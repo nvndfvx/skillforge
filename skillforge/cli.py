@@ -384,7 +384,14 @@ def cmd_canary(args: argparse.Namespace) -> int:
         if not args.candidate:
             print("start 需要 --candidate <候选技能.json>")
             return 1
-        if not 0 < args.weight < 1:
+        if args.mode in ("param", "segment") and not args.field:
+            print(f"--mode {args.mode} 需要 --field <参数名>，例如 --field 客户编号")
+            return 1
+        segments = [s.strip() for s in (args.segments or "").split(",") if s.strip()]
+        if args.mode == "segment" and not segments:
+            print("--mode segment 需要 --segments a,b,c（放行哪些分群）")
+            return 1
+        if args.mode != "segment" and not 0 < args.weight < 1:
             print("--weight 必须在 (0,1) 之间，例如 0.1")
             return 1
         current = store.current_record(skill_id)
@@ -412,11 +419,14 @@ def cmd_canary(args: argparse.Namespace) -> int:
             candidate_version=candidate.version,
             weight=args.weight,
             min_samples=args.min_samples,
+            mode=args.mode,
+            field=args.field,
+            segments=segments,
         )
         state.created_at = state.to_dict()["created_at"]
         book.save(state)
         print(f"灰度已开启：{current.version}（稳定） ← {int(args.weight * 100)}% → {candidate.version}（候选）")
-        print(f"  路由方式：hash(skill_id::item_id) 分桶，同一个 item 永远走同一个版本")
+        print(f"  路由方式：{state.describe()}")
         print(f"  样本门槛：候选满 {args.min_samples} 条才给结论")
         print(f"  下一步：skillforge batch --canary ... 然后 skillforge canary status")
         return 0
@@ -524,7 +534,7 @@ def cmd_batch(args: argparse.Namespace) -> int:
             )
 
         def resolver(item):
-            return candidate if state.routes(item.item_id) else skill
+            return candidate if state.routes(item.item_id, item.params) else skill
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(channel=args.channel, headless=True)
@@ -900,6 +910,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skill-id", required=True)
     p.add_argument("--candidate", default="", help="start 用：候选技能 json 路径")
     p.add_argument("--weight", type=float, default=0.1, help="候选接多少比例（0~1）")
+    p.add_argument("--mode", choices=["item", "param", "segment"], default="item",
+                   help="分流维度：item=按单据 / param=按参数（同一用户黏住）/ segment=只放行白名单")
+    p.add_argument("--field", default="", help="--mode param/segment 用：看哪个参数，如 客户编号")
+    p.add_argument("--segments", default="", help="--mode segment 用：放行哪些值，逗号分隔")
     p.add_argument("--min-samples", type=int, default=20, help="候选满多少条才给结论")
     p.add_argument("--scores", default="", help="promote 用：过发布闸的 scores.json")
     p.add_argument("--force", action="store_true", help="无视样本量/结论强行提升")

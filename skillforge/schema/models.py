@@ -254,6 +254,20 @@ class Skill:
             out.append(f"参数名重复：{sorted(dup)}")
         return out
 
+    def renumber_steps(self) -> None:
+        """按当前顺序重排 step_id，并让依赖 step_id 的字段跟上。
+
+        人审 UI 允许删步骤 / 上下移动，这两件事都会让 step_id 出现空洞或重号。
+        断言是**嵌在步骤里**的，所以不受影响；真正要重建的只有幂等键和 precheck 的 id。
+        """
+        for index, step in enumerate(self.steps, start=1):
+            step.step_id = index
+            key = step.idempotency_key
+            if step.is_write and key and key.startswith("{{flow_run_id}}::"):
+                step.idempotency_key = f"{{{{flow_run_id}}}}::{index}"
+            if step.precheck is not None:
+                step.precheck.assertion_id = f"precheck-{index}"
+
     def review_checklist(self) -> dict[str, bool]:
         """人审三道勾（v3.2）。只报状态，不做判断。"""
         trusted = [

@@ -52,14 +52,27 @@ def _render_form(skill: Skill) -> str:
     """把技能渲染成表单。所有用户数据都过 html.escape。"""
     esc = html.escape
     rows = []
-    for step in skill.steps:
+    for index, step in enumerate(skill.steps):
         target = step.target.name or step.target.css or "-"
-        value = step.value if step.value is not None else ""
         flag = '<span class="write">[写操作]</span>' if step.is_write else ""
+        if step.value is None:
+            value_cell = '<span class="sub">—</span>'
+        else:
+            value_cell = (
+                f'<input type="text" name="value_{index}" value="{esc(str(step.value))}">'
+            )
+        op_cell = (
+            f'<select name="op_{index}">'
+            '<option value="keep">保留</option>'
+            '<option value="drop">删除</option>'
+            '<option value="up">上移</option>'
+            '<option value="down">下移</option>'
+            "</select>"
+        )
         rows.append(
             f"<tr><td>{step.step_id}</td><td><code>{esc(step.action.value)}</code></td>"
-            f"<td>{esc(str(target))}</td><td><code>{esc(str(value))}</code></td>"
-            f"<td>{flag}</td></tr>"
+            f"<td>{esc(str(target))}</td><td>{value_cell}</td>"
+            f"<td>{flag}</td><td>{op_cell}</td></tr>"
         )
 
     assertions = []
@@ -98,11 +111,11 @@ def _render_form(skill: Skill) -> str:
  · 当前状态 <code>{esc(skill.state)}</code></div>
 
 <form method="post" action="/submit">
-  <h2>① 步骤清单 —— 顺序是不是你要的流程</h2>
-  <table><tr><th>#</th><th>动作</th><th>目标</th><th>值</th><th></th></tr>
+  <h2>① 步骤清单 —— 可以删、可以上下移、可以改值</h2>
+  <table><tr><th>#</th><th>动作</th><th>目标</th><th>值（可改）</th><th></th><th>操作</th></tr>
   {''.join(rows)}
   </table>
-  <p><label><input type="checkbox" name="steps_ok" value="1"> 这串步骤就是我要的流程，顺序也对</label></p>
+  <p><label><input type="checkbox" name="steps_ok" value="1"> 这串步骤（含我刚改的）就是我要的流程，顺序也对</label></p>
 
   <h2>② 断言 —— 逐条确认</h2>
   {''.join(assertions) or '<p class="sub">这个技能没有断言（很不正常，回去看看编译结果）</p>'}
@@ -115,11 +128,23 @@ def _render_form(skill: Skill) -> str:
 </html>"""
 
 
-def _render_result(skill: Skill, blockers: list[str]) -> str:
+def _render_result(skill: Skill, blockers: list[str], changes: list[str]) -> str:
     esc = html.escape
     checklist = skill.review_checklist()
     items = "".join(
         f'<li>{"✅" if ok else "❌"} {esc(label)}</li>' for label, ok in checklist.items()
+    )
+    steps = "".join(
+        f"<li>step{s.step_id} <code>{esc(s.action.value)}</code> "
+        f"「{esc(str(s.target.name or s.target.css or '-'))}」</li>"
+        for s in skill.steps
+    )
+    change_block = (
+        "<h2>你这次改了步骤</h2><ul>"
+        + "".join(f"<li>{esc(c)}</li>" for c in changes)
+        + "</ul><p class=\"sub\">step_id 已按新顺序重排，幂等键和 precheck id 一起跟上了。</p>"
+        if changes
+        else ""
     )
     tail = (
         '<p class="ok">→ 三道勾齐了，可以 release。</p>'
@@ -132,7 +157,10 @@ def _render_result(skill: Skill, blockers: list[str]) -> str:
 <title>人审结果</title><style>{_STYLE}</style>
 <h1>人审结果</h1>
 <div class="sub">skill_id <code>{esc(skill.skill_id)}</code> · 状态
- <code>{esc(skill.state)}</code></div>
+ <code>{esc(skill.state)}</code> · 共 {len(skill.steps)} 步</div>
+<h2>现在的步骤</h2><ul>{steps}</ul>
+{change_block}
+<h2>三道勾</h2>
 <ul>{items}</ul>
 {tail}
 <p class="sub">已写回：<code>{esc(str(skill.meta.get("_saved_path", "")))}</code>　可以关掉这个页面了。</p>
@@ -148,6 +176,7 @@ class ReviewSession:
         self.submitted = False
         self.blockers: list[str] = []
         self.answered = 0
+        self.changes: list[str] = []
 
     # -- 表单 -> 技能 -------------------------------------------------------
     def apply(self, fields: dict[str, list[str]]) -> None:
@@ -157,34 +186,92 @@ class ReviewSession:
             values = fields.get(name)
             return (values[0] if values else default).strip()
 
-        self.skill.meta["steps_reviewed"] = get("steps_ok") == "1"
+        original = list(self.skill.steps)
+        changes: list[str] = []
 
-        for step in self.skill.steps:
+        # 1) 先把断言答案按**原始下标**读出来（步骤一动，字段名就对不上了）
+        answers: dict[int, dict[str, str]] = {}
+        precheck_raw: dict[int, str] = {}
+        for index, step in enumerate(original):
+            answers[index] = {
+                kind: get(f"a_{step.step_id}_{kind}", "yes")
+                for kind, assertion in (
+                    ("business", step.assertion),
+                    ("technical", step.technical_assertion),
+                )
+                if assertion is not None
+            }
+            if step.is_write and step.precheck is None:
+                precheck_raw[index] = get(f"p_{step.step_id}")
+
+        # 2) 改值（按原始下标）
+        for index, step in enumerate(original):
+            if step.value is None:
+                continue
+            new_value = get(f"value_{index}", str(step.value))
+            if new_value != str(step.value):
+                changes.append(f"step{step.step_id} 的值：{step.value!r} → {new_value!r}")
+                step.value = new_value
+
+        # 3) 删除（下标集合）—— 不允许删空
+        dropped = {
+            index for index in range(len(original))
+            if get(f"op_{index}", "keep") == "drop"
+        }
+        if len(dropped) >= len(original):
+            changes.append("想删光所有步骤，已忽略：至少留一步")
+            dropped = set()
+
+        steps = [step for index, step in enumerate(original) if index not in dropped]
+        for index in sorted(dropped):
+            changes.append(f"删除了 step{original[index].step_id}")
+
+        # 4) 上下移动（按表单顺序逐条生效；被删掉的跳过）
+        for index in range(len(original)):
+            op = get(f"op_{index}", "keep")
+            if op not in ("up", "down") or index in dropped:
+                continue
+            step = original[index]
+            pos = steps.index(step)
+            if op == "up" and pos > 0:
+                steps[pos - 1], steps[pos] = steps[pos], steps[pos - 1]
+                changes.append(f"step{step.step_id} 上移")
+            elif op == "down" and pos < len(steps) - 1:
+                steps[pos], steps[pos + 1] = steps[pos + 1], steps[pos]
+                changes.append(f"step{step.step_id} 下移")
+
+        # 5) 按新顺序重排 step_id（幂等键、precheck id 一起跟上）
+        self.skill.steps = steps
+        self.skill.renumber_steps()
+        self.changes = changes
+
+        # 6) 断言与 precheck 按**对象身份**落回，它们跟着步骤走
+        for index, step in enumerate(original):
+            if index in dropped:
+                continue
             for kind, assertion in (
                 ("business", step.assertion),
                 ("technical", step.technical_assertion),
             ):
                 if assertion is None:
                     continue
-                answer = get(f"a_{step.step_id}_{kind}", "yes")
+                answer = answers[index].get(kind, "yes")
                 assertion.confirmed_by = "human" if answer == "yes" else "llm_proposed"
                 self.answered += 1
+            raw = precheck_raw.get(index)
+            if raw is not None and step.precheck is None:
+                if raw == "-":
+                    continue
+                step.precheck = Assertion(
+                    assertion_id=f"precheck-{step.step_id}",
+                    kind=AssertionKind.TECHNICAL,
+                    anchor=AnchorKind.UI_TEXT,
+                    operator="entity_exists",
+                    expected=raw or DEFAULT_PRECHECK,
+                    confirmed_by="human",
+                )
 
-        for step in self.skill.steps:
-            if not step.is_write or step.precheck is not None:
-                continue
-            raw = get(f"p_{step.step_id}")
-            if raw == "-":
-                continue
-            step.precheck = Assertion(
-                assertion_id=f"precheck-{step.step_id}",
-                kind=AssertionKind.TECHNICAL,
-                anchor=AnchorKind.UI_TEXT,
-                operator="entity_exists",
-                expected=raw or DEFAULT_PRECHECK,
-                confirmed_by="human",
-            )
-
+        self.skill.meta["steps_reviewed"] = get("steps_ok") == "1"
         checklist = self.skill.review_checklist()
         self.skill.state = "reviewed" if all(checklist.values()) else "draft"
         self.blockers = self.skill.publish_blockers()
@@ -196,7 +283,7 @@ class ReviewSession:
         return _render_form(self.skill)
 
     def render_result(self) -> str:
-        return _render_result(self.skill, self.blockers)
+        return _render_result(self.skill, self.blockers, self.changes)
 
 
 def build_server(

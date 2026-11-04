@@ -198,6 +198,97 @@ def test_html_is_escaped():
     assert "&lt;b&gt;" in html_text
 
 
+def make_three_step_skill() -> Skill:
+    skill = make_skill()
+    skill.steps.insert(
+        1,
+        Step(
+            step_id=99,
+            action=ActionKind.FILL,
+            target=Locator(role="textbox", name="金额"),
+            value="{{金额}}",
+        ),
+    )
+    skill.renumber_steps()
+    return skill
+
+
+def test_drop_step_renumbers_and_keeps_precheck():
+    with temp_dir() as tmp:
+        path = tmp / "skill.json"
+        with Live(make_skill(), path) as live:
+            status, body = live.post(
+                {"steps_ok": "1", "op_0": "drop",
+                 "a_2_business": "yes", "a_2_technical": "yes", "p_2": "X-1"}
+            )
+        assert status == 200
+        assert "删除了 step1" in body
+
+        saved = load_skill(path)
+        assert len(saved.steps) == 1
+        assert saved.steps[0].step_id == 1, "删完后必须重排 step_id"
+        assert saved.steps[0].action.value == "click"
+        assert saved.steps[0].precheck.expected == "X-1"
+        assert saved.steps[0].precheck.assertion_id == "precheck-1", "precheck id 要跟着新 step_id"
+
+
+def test_move_down_reorders_and_edits_value():
+    with temp_dir() as tmp:
+        path = tmp / "skill.json"
+        with Live(make_three_step_skill(), path) as live:
+            status, body = live.post(
+                {"steps_ok": "1", "op_0": "down", "value_1": "{{金额}}元",
+                 "a_3_business": "yes", "a_3_technical": "yes", "p_3": "X-1"}
+            )
+        assert status == 200
+        assert "step1 下移" in body
+
+        saved = load_skill(path)
+        assert [s.target.name for s in saved.steps] == ["金额", "客户名称", "提交"]
+        assert [s.step_id for s in saved.steps] == [1, 2, 3]
+        assert saved.steps[0].value == "{{金额}}元", "改值要跟着同一个 step 走"
+
+
+def test_move_up():
+    with temp_dir() as tmp:
+        path = tmp / "skill.json"
+        with Live(make_three_step_skill(), path) as live:
+            live.post(
+                {"steps_ok": "1", "op_2": "up",
+                 "a_3_business": "yes", "a_3_technical": "yes", "p_3": "X-1"}
+            )
+        saved = load_skill(path)
+        assert [s.target.name for s in saved.steps] == ["客户名称", "提交", "金额"]
+
+
+def test_cannot_drop_all_steps():
+    with temp_dir() as tmp:
+        path = tmp / "skill.json"
+        with Live(make_skill(), path) as live:
+            status, body = live.post(
+                {"steps_ok": "1", "op_0": "drop", "op_1": "drop",
+                 "a_2_business": "yes", "a_2_technical": "yes", "p_2": "X-1"}
+            )
+        assert status == 200
+        assert "至少留一步" in body
+        assert len(load_skill(path).steps) == 2, "删空必须被拒，且不写坏文件"
+
+
+def test_assertion_answers_survive_step_moves():
+    """步骤换位置之后，断言答案必须跟着原来那个 step，不能错位。"""
+    with temp_dir() as tmp:
+        path = tmp / "skill.json"
+        with Live(make_three_step_skill(), path) as live:
+            live.post(
+                {"steps_ok": "1", "op_2": "up",
+                 "a_3_business": "no", "a_3_technical": "yes", "p_3": "X-1"}
+            )
+        saved = load_skill(path)
+        submit = [s for s in saved.steps if s.action is ActionKind.CLICK][0]
+        assert submit.assertion.confirmed_by == "llm_proposed", "答了「不对」就该保持未确认"
+        assert submit.technical_assertion.confirmed_by == "human"
+
+
 def main() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failures = 0

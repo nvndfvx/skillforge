@@ -1,4 +1,4 @@
-# SkillForge
+﻿# SkillForge
 
 [![ci](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml/badge.svg)](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml)
 
@@ -79,7 +79,7 @@
 ```bash
 git clone https://github.com/nvndfvx/skillforge.git
 cd skillforge
-python tests/run_all.py          # 126 个测试全过，零第三方依赖
+python tests/run_all.py          # 135 个测试全过，零第三方依赖
 python examples/demo_loop.py     # 端到端闭环演示（不用浏览器）
 ```
 
@@ -112,7 +112,7 @@ python scripts/bootstrap_playwright.py
 
 ```bash
 skillforge --help                              # 命令能出来
-python tests/run_all.py                        # 126 个测试全过
+python tests/run_all.py                        # 135 个测试全过
 python tests/test_real_browser.py              # 真浏览器 27 项（没装 playwright 会 SKIP）
 ```
 
@@ -162,11 +162,11 @@ skillforge release --store ./store --skill skill.json --scores scores.json
 
 | | |
 |---|---|
-| 离线测试 | **126 个**，零第三方依赖（`python tests/run_all.py`） |
+| 离线测试 | **135 个**，零第三方依赖（`python tests/run_all.py`） |
 | 真浏览器检查 | **27 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
 | CI | ubuntu + windows × Python 3.10/3.12，全绿 |
 | 闭环 | 录制 → 对齐 → 编译 → 人审三道勾 → 基准集跑批 → 过闸发布 → 自动打补丁 → 回滚 |
-| 还缺 | 人审 UI 支持改步骤（现在只能确认）、按用户分群的灰度 |
+| 还缺 | 多技能编排（现在一次只跑一个技能） |
 
 ## 命令行
 
@@ -183,7 +183,7 @@ python -m skillforge compile --trace-a demos/a.json --trace-b demos/b.json \
 
 # 3. 人审三道勾：两种方式选一个
 python -m skillforge review --skill skill.json -i          # 逐条交互（终端）
-python -m skillforge review --skill skill.json --serve     # 本地网页点选（纯 stdlib）
+python -m skillforge review --skill skill.json --serve     # 本地网页：可删步骤/上下移/改值
 
 # 4. 建回归基准集（只增不删）
 python -m skillforge golden add --store ./store --skill-id expense \
@@ -220,8 +220,11 @@ python -m skillforge batch --store ./store --skill skill.json \
 # 10. 灰度发布：新版本先接 10% 真实请求，样本够了再 promote
 python -m skillforge canary start --store ./store --skill-id expense \
     --candidate skill-v1.1.json --weight 0.1 --min-samples 20
+#    按用户分群而不是按单据：
+#    --mode param --field 客户编号       同一用户永远同一版本
+#    --mode segment --field 租户 --segments A公司,B公司   只放行白名单（100%）
 python -m skillforge batch --store ./store --skill skill.json \
-    --cases cases.json --out report.json --canary        # 按 item_id 粘性分流
+    --cases cases.json --out report.json --canary        # 按分群粘性分流
 python -m skillforge canary status --store ./store --skill-id expense
 python -m skillforge canary promote --store ./store --skill-id expense --scores scores.json
 python -m skillforge canary abort  --store ./store --skill-id expense

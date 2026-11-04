@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field as dc_field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,19 +38,51 @@ class CanaryState:
     weight: float = 0.1
     min_samples: int = 20
     created_at: str = ""
-    samples: dict[str, dict[str, int]] = field(default_factory=dict)
+    samples: dict[str, dict[str, int]] = dc_field(default_factory=dict)
+    # 分流维度：
+    #   item    —— 按 item_id 哈希（同一张单永远同一版本）
+    #   param   —— 按 params[field] 哈希（**同一个用户**永远同一版本）
+    #   segment —— 只把 params[field] 在白名单里的放给候选（100%，不看 weight）
+    mode: str = "item"
+    field: str = ""
+    segments: list[str] = dc_field(default_factory=list)
 
     # -- 路由 ---------------------------------------------------------------
-    def routes(self, key: str) -> bool:
-        """这个 key 该不该走候选版本。同一个 key 永远给同一个答案。"""
+    def route_key(self, item_id: str, params: dict[str, Any] | None = None) -> str:
+        """这一条的分流依据。
+
+        取不到参数时退回 item_id —— **不能崩，也不能退化成"全走稳定版"**，
+        否则缺一个字段就悄悄让灰度变成 0% 或 100%。
+        """
+        if self.mode in ("param", "segment") and self.field:
+            value = (params or {}).get(self.field)
+            if value is None or value == "":
+                return item_id
+            return str(value)
+        return item_id
+
+    def routes(self, item_id: str, params: dict[str, Any] | None = None) -> bool:
+        """这一条该不该走候选版本。同一个分流依据永远给同一个答案。"""
+        key = self.route_key(item_id, params)
+        if self.mode == "segment":
+            return key in set(self.segments)
         threshold = round(self.weight * BUCKETS)
         return bucket(self.skill_id, key) < threshold
 
     def actual_weight(self, keys: list[str]) -> float:
-        """给定 key 集合的真实分流比例（可能偏离 weight，样本小的时候很正常）。"""
+        """给定分流依据集合的真实比例（可能偏离 weight，样本小的时候很正常）。"""
         if not keys:
             return 0.0
+        if self.mode == "segment":
+            return round(sum(1 for k in keys if k in set(self.segments)) / len(keys), 4)
         return round(sum(1 for k in keys if self.routes(k)) / len(keys), 4)
+
+    def describe(self) -> str:
+        if self.mode == "param":
+            return f"按参数「{self.field}」分桶（同一用户永远同一版本）"
+        if self.mode == "segment":
+            return f"只放行「{self.field}」属于 {self.segments} 的请求（100%）"
+        return "按 item_id 分桶（同一张单永远同一版本）"
 
     # -- 统计 ---------------------------------------------------------------
     def record(self, version: str, ok: bool) -> None:
@@ -90,6 +122,10 @@ class CanaryState:
             "weight": self.weight,
             "min_samples": self.min_samples,
             "candidate_version": self.candidate_version,
+            "mode": self.mode,
+            "field": self.field,
+            "segments": list(self.segments),
+            "routing": self.describe(),
             "candidate": {"samples": cand_total, "rate": cand_rate},
             "stable": {"version": stable_version, "samples": stable_total, "rate": stable_rate},
             "enough_samples": enough,
@@ -104,6 +140,9 @@ class CanaryState:
             "min_samples": self.min_samples,
             "created_at": self.created_at or _now(),
             "samples": self.samples,
+            "mode": self.mode,
+            "field": self.field,
+            "segments": list(self.segments),
         }
 
     @classmethod
@@ -118,6 +157,9 @@ class CanaryState:
                 str(k): {"ok": int(v.get("ok") or 0), "fail": int(v.get("fail") or 0)}
                 for k, v in (data.get("samples") or {}).items()
             },
+            mode=str(data.get("mode") or "item"),
+            field=str(data.get("field") or ""),
+            segments=[str(s) for s in (data.get("segments") or [])],
         )
 
 
