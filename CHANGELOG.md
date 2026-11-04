@@ -2,6 +2,13 @@
 
 本文件记录每个版本做了什么。版本号在 `skillforge/__init__.py`，**单一来源**。
 
+## v0.6.1
+
+- **分发包改名 `skillforge-engine`**：PyPI 上 `skillforge` 已被别人占用（v1.2.0）。
+  导入名仍是 `skillforge`，命令仍是 `skillforge` —— 跟 `pip install beautifulsoup4` → `import bs4` 同理。
+- 新增 `publish.yml`：PyPI trusted publishing（OIDC），**不需要任何 token 或密码**。
+  首发用手动触发，PyPI 上配好 Trusted Publisher 后把 tag 触发打开即可。
+
 ## v0.6.0
 
 打包与分发：

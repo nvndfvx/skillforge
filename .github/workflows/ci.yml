@@ -1,4 +1,4 @@
-name: ci
+﻿name: ci
 
 on:
   push:
@@ -74,9 +74,9 @@ jobs:
           import glob, re, tomllib, zipfile
           # pyproject 里是 dynamic，版本来自包本身；这里确认两者一致且等于 wheel 文件名
           wheel = glob.glob("dist/*.whl")[0]
-          file_version = re.search(r"skillforge-(.+?)-py3", wheel).group(1)
+          file_version = re.search(r"skillforge[_-]engine-(.+?)-py3", wheel).group(1)
           info = tomllib.loads(open("pyproject.toml", encoding="utf-8").read())
-          assert info["project"]["name"] == "skillforge"
+          assert info["project"]["name"] == "skillforge-engine"
           src = zipfile.ZipFile(wheel).read("skillforge/__init__.py").decode()
           pkg_version = re.search(r'__version__ = "([^"]+)"', src).group(1)
           assert pkg_version == file_version, (pkg_version, file_version)

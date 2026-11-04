@@ -3,7 +3,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "skillforge"
+# 分发包名用 skillforge-engine：pypi 上 skillforge 已被别人占用（v1.2.0）。
+# 导入名仍然是 skillforge，命令仍然是 skillforge —— 跟 beautifulsoup4 → bs4 一样。
+name = "skillforge-engine"
 # 单一版本号来源：skillforge/__init__.py，避免两处各改一次还改不一致
 dynamic = ["version"]
 description = "观察人类操作 → 蒸馏参数化技能 → 沙箱执行 → 异常自愈（纵向调优）"

@@ -1,4 +1,4 @@
-# SkillForge
+﻿# SkillForge
 
 [![ci](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml/badge.svg)](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/nvndfvx/skillforge?label=release)](https://github.com/nvndfvx/skillforge/releases/latest)
@@ -88,7 +88,7 @@ python examples/demo_loop.py     # 端到端闭环演示（不用浏览器）
 ### 方式二：当成命令行工具用
 
 ```bash
-pip install -e .                          # 从源码装（开发）
+pip install -e .                          # 从源码装（开发；分发名 skillforge-engine）
 # 或
 pip install git+https://github.com/nvndfvx/skillforge.git
 
@@ -100,7 +100,7 @@ skillforge --help
 ### 方式三：要真的控制浏览器（录制 / 真跑 / 自动修）
 
 ```bash
-pip install "skillforge[browser]"
+pip install "skillforge-engine[browser]"
 playwright install chromium        # 约 130MB
 ```
 
@@ -116,13 +116,13 @@ python scripts/bootstrap_playwright.py
 
 ```bash
 # 从 Releases 页面下载 skillforge-<版本>-py3-none-any.whl 后
-pip install skillforge-0.6.0-py3-none-any.whl
+pip install skillforge_engine-0.6.1-py3-none-any.whl
 ```
 
 也可以让 pip 直接吃 URL：
 
 ```bash
-pip install "https://github.com/nvndfvx/skillforge/releases/latest/download/skillforge-0.6.0-py3-none-any.whl"
+pip install "https://github.com/nvndfvx/skillforge/releases/latest/download/skillforge_engine-0.6.1-py3-none-any.whl"
 ```
 
 > 这个 wheel 是 CI 里**真装进干净 venv、再用装进去的包跑完整套 151 个测试**之后才发布的。
@@ -185,7 +185,7 @@ skillforge release --store ./store --skill skill.json --scores scores.json
 | 真浏览器检查 | **27 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
 | CI | ubuntu + windows × Python 3.10/3.12，全绿 |
 | 打包 | wheel + sdist；CI 会装进干净 venv，**用装进去的包**再跑一遍全套测试 |
-| 版本 | 0.6.0（`skillforge/__init__.py` 单一来源，打 tag 自动发 Release） |
+| 版本 | 0.6.1（`skillforge/__init__.py` 单一来源，打 tag 自动发 Release） |
 | 闭环 | 录制 → 对齐 → 编译 → 人审三道勾 → 基准集跑批 → 过闸发布 → 自动打补丁 → 回滚 |
 | 还缺 | 并行分支与条件跳转（编排现在只有串行） |
 
