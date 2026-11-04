@@ -99,8 +99,96 @@ def cmd_compile(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ask(prompt: str, *, default: bool = False) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    try:
+        answer = input(f"{prompt} {suffix} ").strip().lower()
+    except EOFError:
+        return default
+    if not answer:
+        return default
+    return answer in ("y", "yes", "是", "1", "对")
+
+
+def _review_interactive(skill, args: argparse.Namespace) -> int:
+    """交互式人审：把三道勾从「记参数」变成「逐条看、逐条答」。
+
+    为什么值得单独做：三道勾是整套系统的安全闸，但之前只能靠
+    `--steps-reviewed --confirm-assertions --precheck "..."` 盲打，
+    人根本不知道自己在确认什么。闸越关键，越不能靠背参数。
+    """
+    print(f"技能 {skill.skill_id} v{skill.version}  当前状态 {skill.state}\n")
+
+    print("=== ① 步骤清单：确认顺序是不是你要的流程 ===")
+    for step in skill.steps:
+        flag = "  [写操作]" if step.is_write else ""
+        target = step.target.name or step.target.css or "-"
+        print(f"  {step.step_id}. {step.action.value:6s} 「{target}」 value={step.value!r}{flag}")
+    if _ask("\n这串步骤就是你要的流程、顺序也对？"):
+        skill.meta["steps_reviewed"] = True
+    else:
+        skill.meta["steps_reviewed"] = False
+        print("  → 未通过：顺序或步骤有问题，先改 skill.json 再来")
+
+    print("\n=== ② 断言：逐条确认 ===")
+    for step in skill.steps:
+        for assertion in (step.assertion, step.technical_assertion):
+            if assertion is None:
+                continue
+            kind = "业务" if assertion.kind is AssertionKind.BUSINESS else "技术"
+            print(f"  step{step.step_id} [{kind}] {assertion.operator} {assertion.expected!r}")
+            if _ask("    这条断言对不对？", default=True):
+                assertion.confirmed_by = "human"
+            else:
+                assertion.confirmed_by = "llm_proposed"
+
+    print("\n=== ③ 写操作的 precheck：怎么判断这单已经存在 ===")
+    for step in skill.steps:
+        if not step.is_write or step.precheck is not None:
+            continue
+        default = args.precheck or r"R\-\d{6,}"
+        try:
+            answer = input(
+                f"  step{step.step_id}「{step.target.name or '-'}」查重正则"
+                f"（直接回车用 {default}，输入 - 表示先空着）> "
+            ).strip()
+        except EOFError:
+            answer = ""
+        if answer == "-":
+            print("    → 留空：发布闸会拦住，直到你补上")
+            continue
+        step.precheck = Assertion(
+            assertion_id=f"precheck-{step.step_id}",
+            kind=AssertionKind.TECHNICAL,
+            anchor=AnchorKind.UI_TEXT,
+            operator="entity_exists",
+            expected=answer or default,
+            confirmed_by="human",
+        )
+        print(f"    → 已写入 precheck：{step.precheck.expected}")
+
+    checklist = skill.review_checklist()
+    skill.state = "reviewed" if all(checklist.values()) else "draft"
+    blockers = skill.publish_blockers()
+
+    out = Path(args.out or args.skill)
+    save_skill(skill, out)
+
+    print("\n人审三道勾：")
+    for label, ok in checklist.items():
+        print(f"  [{'x' if ok else ' '}] {label}")
+    print(f"状态：{skill.state}")
+    _print_list("还剩的发布阻断", blockers)
+    if not blockers:
+        print("→ 可以 release 了")
+    return 0 if not blockers else 1
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     skill = load_skill(args.skill)
+
+    if getattr(args, "interactive", False):
+        return _review_interactive(skill, args)
 
     if args.steps_reviewed:
         skill.meta["steps_reviewed"] = True
@@ -436,6 +524,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--steps-reviewed", action="store_true", help="① 步骤顺序已人审")
     p.add_argument("--confirm-assertions", action="store_true", help="② 断言已人审")
     p.add_argument("--precheck", default="", help="③ 写操作的查重正则，如 'R-\\d{6,}'")
+    p.add_argument("--interactive", "-i", action="store_true",
+                   help="逐条交互确认（推荐：闸越关键越别靠背参数）")
     p.add_argument("--out", default="")
     p.set_defaults(func=cmd_review)
 

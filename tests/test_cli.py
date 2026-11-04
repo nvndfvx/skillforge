@@ -246,6 +246,62 @@ def test_heal_refuses_without_golden_set():
         assert "Golden Set 是空的" in out
 
 
+def test_review_interactive():
+    """交互式人审：三道勾逐条问，答完就能发布。"""
+    import builtins
+
+    with temp_dir() as tmp:
+        a, b = _setup_traces(tmp)
+        skill_path = tmp / "skill.json"
+        run_cli(
+            "compile", "--trace-a", str(a), "--trace-b", str(b),
+            "--out", str(skill_path), "--skill-id", "expense",
+        )
+        # 顺序：① 步骤 → ② 两条断言 → ③ precheck
+        answers = iter(["y", "y", "y", r"R\-\d{6,}"])
+        original = builtins.input
+        builtins.input = lambda prompt="": next(answers)
+        try:
+            code, out = run_cli("review", "--skill", str(skill_path), "--interactive")
+        finally:
+            builtins.input = original
+
+        assert code == 0, out
+        assert "① 步骤清单" in out
+        assert "可以 release 了" in out
+        skill = load_skill(skill_path)
+        assert skill.state == "reviewed"
+        assert all(skill.review_checklist().values()), skill.review_checklist()
+        assert skill.steps[-1].precheck is not None
+        assert skill.steps[-1].precheck.expected == r"R\-\d{6,}"
+
+
+def test_review_interactive_rejects_bad_steps():
+    """第①道勾答「否」→ 状态留在 draft，不许发布。"""
+    import builtins
+
+    with temp_dir() as tmp:
+        a, b = _setup_traces(tmp)
+        skill_path = tmp / "skill.json"
+        run_cli(
+            "compile", "--trace-a", str(a), "--trace-b", str(b),
+            "--out", str(skill_path), "--skill-id", "expense",
+        )
+        answers = iter(["n", "y", "y", r"R\-\d{6,}"])
+        original = builtins.input
+        builtins.input = lambda prompt="": next(answers)
+        try:
+            code, out = run_cli("review", "--skill", str(skill_path), "--interactive")
+        finally:
+            builtins.input = original
+
+        assert code == 1, out
+        assert "顺序或步骤有问题" in out
+        skill = load_skill(skill_path)
+        assert skill.state == "draft"
+        assert skill.review_checklist()["① 步骤顺序已人审"] is False
+
+
 def main_() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failures = 0
