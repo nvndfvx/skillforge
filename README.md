@@ -1,6 +1,8 @@
-﻿# SkillForge
+# SkillForge
 
 [![ci](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml/badge.svg)](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/nvndfvx/skillforge?label=release)](https://github.com/nvndfvx/skillforge/releases/latest)
+[![python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 
 **看着人干一遍 → 蒸馏成一个技能 → 沙箱执行 → 坏了自己修 → 越用越准。**
 
@@ -108,6 +110,23 @@ playwright install chromium        # 约 130MB
 python scripts/bootstrap_playwright.py
 ```
 
+### 方式四：直接下现成的 wheel（不用 git，不用 pip install git+…）
+
+每个版本都会打包成 wheel 挂到 [Releases](https://github.com/nvndfvx/skillforge/releases)：
+
+```bash
+# 从 Releases 页面下载 skillforge-<版本>-py3-none-any.whl 后
+pip install skillforge-0.6.0-py3-none-any.whl
+```
+
+也可以让 pip 直接吃 URL：
+
+```bash
+pip install "https://github.com/nvndfvx/skillforge/releases/latest/download/skillforge-0.6.0-py3-none-any.whl"
+```
+
+> 这个 wheel 是 CI 里**真装进干净 venv、再用装进去的包跑完整套 151 个测试**之后才发布的。
+
 ### 验证装好了
 
 ```bash
@@ -165,8 +184,12 @@ skillforge release --store ./store --skill skill.json --scores scores.json
 | 离线测试 | **151 个**，零第三方依赖（`python tests/run_all.py`） |
 | 真浏览器检查 | **27 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
 | CI | ubuntu + windows × Python 3.10/3.12，全绿 |
+| 打包 | wheel + sdist；CI 会装进干净 venv，**用装进去的包**再跑一遍全套测试 |
+| 版本 | 0.6.0（`skillforge/__init__.py` 单一来源，打 tag 自动发 Release） |
 | 闭环 | 录制 → 对齐 → 编译 → 人审三道勾 → 基准集跑批 → 过闸发布 → 自动打补丁 → 回滚 |
 | 还缺 | 并行分支与条件跳转（编排现在只有串行） |
+
+变更历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 命令行
 

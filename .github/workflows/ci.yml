@@ -25,3 +25,75 @@ jobs:
       # GitHub runner 自带 node。
       - name: Run offline tests
         run: python tests/run_all.py
+
+  # 光"源码树里能跑"不够 —— 别人是 pip install 之后用的。
+  # 这个 job 把打好的 wheel 装进干净 venv，再用**装进去的那份包**跑一遍全套测试。
+  package:
+    name: build & verify wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build backend
+        run: python -m pip install --upgrade build
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: Check wheel contents (no tests/examples leaked)
+        run: |
+          python - <<'PY'
+          import glob, zipfile, sys
+          wheels = glob.glob("dist/*.whl")
+          assert len(wheels) == 1, wheels
+          names = zipfile.ZipFile(wheels[0]).namelist()
+          leaked = [n for n in names if n.startswith(("tests/", "examples/", "docs/", "scripts/"))]
+          assert not leaked, f"这些不该进包: {leaked}"
+          must = ["skillforge/cli.py", "skillforge/batch.py", "skillforge/canary.py",
+                  "skillforge/flow.py", "skillforge/webui.py", "skillforge/signals.py"]
+          missing = [m for m in must if m not in names]
+          assert not missing, f"包里缺文件: {missing}"
+          print(f"{wheels[0]}: {len(names)} 个文件，检查通过")
+          PY
+
+      - name: Install the wheel into a clean venv
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/python -m pip install --upgrade pip
+          /tmp/venv/bin/pip install dist/*.whl
+          /tmp/venv/bin/skillforge --help
+          /tmp/venv/bin/python -m skillforge --help
+          /tmp/venv/bin/python -c "import skillforge; print('version', skillforge.__version__)"
+
+      - name: Version in package matches pyproject
+        run: |
+          python - <<'PY'
+          import glob, re, tomllib, zipfile
+          # pyproject 里是 dynamic，版本来自包本身；这里确认两者一致且等于 wheel 文件名
+          wheel = glob.glob("dist/*.whl")[0]
+          file_version = re.search(r"skillforge-(.+?)-py3", wheel).group(1)
+          info = tomllib.loads(open("pyproject.toml", encoding="utf-8").read())
+          assert info["project"]["name"] == "skillforge"
+          src = zipfile.ZipFile(wheel).read("skillforge/__init__.py").decode()
+          pkg_version = re.search(r'__version__ = "([^"]+)"', src).group(1)
+          assert pkg_version == file_version, (pkg_version, file_version)
+          print("版本一致:", pkg_version)
+          PY
+
+      # 最强的一条：用**装进去的包**跑全套离线测试。
+      # tests/ 拷到临时目录，那里没有 skillforge/ 源码，import 必然落到 site-packages。
+      - name: Run the offline suite against the installed package
+        run: |
+          mkdir -p /tmp/pkgtest
+          cp -r tests /tmp/pkgtest/
+          cd /tmp/pkgtest
+          /tmp/venv/bin/python tests/run_all.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error

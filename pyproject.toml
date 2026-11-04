@@ -1,28 +1,59 @@
-﻿[build-system]
-requires = ["setuptools>=68"]
+[build-system]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "skillforge"
-version = "0.5.0"
+# 单一版本号来源：skillforge/__init__.py，避免两处各改一次还改不一致
+dynamic = ["version"]
 description = "观察人类操作 → 蒸馏参数化技能 → 沙箱执行 → 异常自愈（纵向调优）"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+# PEP 639：用 SPDX 表达式 + license-files，不用已废弃的 license={text=...}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "SkillForge" }]
-keywords = ["rpa", "browser-automation", "playwright", "self-healing", "skill-distillation"]
+keywords = [
+  "rpa",
+  "browser-automation",
+  "playwright",
+  "self-healing",
+  "skill-distillation",
+  "regression-gate",
+]
 classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Operating System :: OS Independent",
+  "Topic :: Software Development :: Testing",
+  "Topic :: Software Development :: Quality Assurance",
+  "Typing :: Typed",
 ]
 dependencies = []
 
 [project.optional-dependencies]
 browser = ["playwright>=1.44"]
+dev = ["build>=1.2"]
+
+[project.urls]
+Homepage = "https://github.com/nvndfvx/skillforge"
+Repository = "https://github.com/nvndfvx/skillforge"
+Documentation = "https://github.com/nvndfvx/skillforge/blob/main/docs/usage.md"
+Changelog = "https://github.com/nvndfvx/skillforge/blob/main/CHANGELOG.md"
+Issues = "https://github.com/nvndfvx/skillforge/issues"
 
 [project.scripts]
 skillforge = "skillforge.cli:main"
 
+[tool.setuptools.dynamic]
+version = { attr = "skillforge.__version__" }
+
 [tool.setuptools.packages.find]
 include = ["skillforge*"]
+# tests / examples / docs 不进包 —— 装完的人不需要自带测试
+exclude = ["tests*", "examples*", "docs*", "scripts*"]

@@ -1,0 +1,6 @@
+
+[browser]
+playwright>=1.44
+
+[dev]
+build>=1.2

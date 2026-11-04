@@ -1,0 +1,53 @@
+name: release
+
+# 打 tag（v0.6.0 这种）就自动：校验版本号 → 打包 → 建 Release → 把 wheel/sdist 挂上去。
+# 别人不需要装 git，直接下 wheel 就能 pip install。
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build & publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 打 tag 忘了改版本号，这里当场失败 —— 别让下载页上的版本和代码对不上
+      - name: Tag must match the version in the package
+        run: |
+          python - <<'PY'
+          import os, pathlib, re, sys
+          tag = os.environ["GITHUB_REF_NAME"]
+          version = re.search(
+              r'__version__ = "([^"]+)"',
+              pathlib.Path("skillforge/__init__.py").read_text(encoding="utf-8"),
+          ).group(1)
+          if tag.lstrip("v") != version:
+              sys.exit(f"tag {tag} 与包版本 {version} 不一致：先改 __version__ 再打 tag")
+          print("版本一致:", version)
+          PY
+
+      - name: Install build backend
+        run: python -m pip install --upgrade build
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: Show what will be uploaded
+        run: ls -lh dist/
+
+      - name: Create GitHub Release with artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag
