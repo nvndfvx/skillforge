@@ -1,4 +1,4 @@
-﻿"""命令行入口：把闭环的每一段变成可执行命令。
+"""命令行入口：把闭环的每一段变成可执行命令。
 
     python -m skillforge compile  --trace-a a.json --trace-b b.json --out skill.json
     python -m skillforge review   --skill skill.json --steps-reviewed --confirm-assertions --precheck "R-\\d{6,}"
@@ -369,6 +369,22 @@ def cmd_signals(args: argparse.Namespace) -> int:
     if report["escalated"]:
         print(f"\n⚠ {len(report['escalated'])} 条探针已升格：环境可能真的变了。")
         return 1 if args.fail_on_escalated else 0
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """环境自检：把每一环拆开验，说清哪一环没通、该怎么办。"""
+    from .doctor import FAIL, format_checks, run_checks, worst
+
+    print("SkillForge 环境自检\n")
+    checks = run_checks(channel=args.channel, deep=not args.shallow)
+    print(format_checks(checks))
+    level = worst(checks)
+    print()
+    if level == FAIL:
+        print("结论：有环节没通 —— 按上面带 → 的提示处理；还不行就把这段输出发我。")
+        return 1
+    print("结论：都通了，可以开始录演示。")
     return 0
 
 
@@ -1128,6 +1144,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--threshold", type=int, default=5,
                    help="technical 探针连续失败多少次升格告警")
     p.set_defaults(func=cmd_run_golden)
+
+    p = sub.add_parser("doctor", help="环境自检：Python / playwright / 浏览器 / 目录")
+    p.add_argument("--channel", default="chrome", help="用哪个浏览器内核（chrome / msedge）")
+    p.add_argument("--shallow", action="store_true", help="不真开浏览器（快，但少验一环）")
+    p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("run", help="跑一次技能（按 skill.domain 自动分派 browser / cli）")
     p.add_argument("--skill", required=True)
