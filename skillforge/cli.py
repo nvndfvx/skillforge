@@ -1,4 +1,4 @@
-﻿"""命令行入口：把闭环的每一段变成可执行命令。
+"""命令行入口：把闭环的每一段变成可执行命令。
 
     python -m skillforge compile  --trace-a a.json --trace-b b.json --out skill.json
     python -m skillforge review   --skill skill.json --steps-reviewed --confirm-assertions --precheck "R-\\d{6,}"
@@ -438,7 +438,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.start_url:
         _override_start_url(skill, args.start_url)
     async def flow():
-        async with launch_page(channel=args.channel) as page:
+        async with launch_page(channel=args.channel, profile_dir=args.profile or None) as page:
             return await execute(skill, params, page, run_id=args.run_id or "run")
 
     try:
@@ -820,25 +820,30 @@ def cmd_record(args: argparse.Namespace) -> int:
     注意：`input()` 会阻塞事件循环，而页面事件是靠绑定回调送进来的 ——
     所以必须 `asyncio.to_thread(input, ...)`，否则你在浏览器里点半天，一条都录不到。
     """
-    from playwright.async_api import async_playwright
-
+    from .executor.playwright_page import launch_page
     from .observer.recorder import TraceRecorder
 
+    profile = args.profile or None
+
     async def flow() -> int:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(channel=args.channel, headless=args.headless)
-            try:
-                page = await browser.new_page()
-                await page.goto(args.url, wait_until="domcontentloaded")
-                recorder = TraceRecorder(page, settle_timeout_ms=args.settle)
-                await recorder.start()
-                print(f"\n开始录制：{args.url}")
-                print("  从现在起，在浏览器里把你的操作走一遍。")
-                print("  ⚠ 两次演示要故意换参数（客户名/金额…），否则变量会被判成常量。")
-                await asyncio.to_thread(input, "\n操作完成后，回到这个窗口按回车结束录制 > ")
-                trace = await recorder.stop()
-            finally:
-                await browser.close()
+        # 走 launch_page：它统一处理临时目录，并支持 --profile 复用登录状态
+        async with launch_page(
+            channel=args.channel, headless=args.headless, profile_dir=profile
+        ) as adapter:
+            page = adapter.page
+            await page.goto(args.url, wait_until="domcontentloaded")
+            if profile:
+                print(f"\n使用持久化配置：{profile}（登过一次就不用再登）")
+            recorder = TraceRecorder(page, settle_timeout_ms=args.settle)
+            await recorder.start()
+            print(f"\n开始录制：{args.url}")
+            print("  从现在起，在浏览器里把你的操作走一遍。")
+            if not profile:
+                print("  ！如果这里被跳到登录页：登录动作也会被录进技能里。")
+                print("    正式录之前先加 --profile <目录> 登一次，再重新录。")
+            print("  ！两次演示要故意换参数（客户名/金额…），否则变量会被判成常量。")
+            await asyncio.to_thread(input, "\n操作完成后，回到这个窗口按回车结束录制 > ")
+            trace = await recorder.stop()
 
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -895,7 +900,7 @@ def cmd_heal(args: argparse.Namespace) -> int:
         book = SignalBook(store.root, threshold=args.signal_threshold)
 
         # 1) 先在真页面上跑一次，拿到「真实的失败」
-        async with launch_page(channel=args.channel) as page:
+        async with launch_page(channel=args.channel, profile_dir=args.profile or None) as page:
             failed_run = await execute(skill, params, page, run_id="heal::probe")
             # H14：探测运行也计入探针信号
             _print_escalations(book.record_run(skill, failed_run))
@@ -919,7 +924,7 @@ def cmd_heal(args: argparse.Namespace) -> int:
             for case in cases:
                 case_params = dict(case.params)
                 case_params.setdefault("start_url", args.start_url)
-                async with launch_page(channel=args.channel) as case_page:
+                async with launch_page(channel=args.channel, profile_dir=args.profile or None) as case_page:
                     run = await execute(
                         candidate_skill, case_params, case_page, run_id=f"heal::{case.case_id}"
                     )
@@ -1037,7 +1042,7 @@ def cmd_run_golden(args: argparse.Namespace) -> int:
             for case in cases:
                 params = dict(case.params)
                 params.setdefault("start_url", args.start_url)
-                async with launch_page(channel=args.channel) as page:
+                async with launch_page(channel=args.channel, profile_dir=args.profile or None) as page:
                     run = await execute(skill, params, page, run_id=f"golden::{case.case_id}")
                 escalated.extend(book.record_run(skill, run))
                 failed = run.failed_step()
@@ -1141,6 +1146,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--channel", default="chrome")
     p.add_argument("--cwd", default="", help="cli 域：命令的工作目录")
     p.add_argument("--timeout", type=int, default=60, help="cli 域：单条命令超时秒数")
+    p.add_argument("--profile", default="", help="持久化浏览器配置目录（要登录的系统用）")
     p.add_argument("--threshold", type=int, default=5,
                    help="technical 探针连续失败多少次升格告警")
     p.set_defaults(func=cmd_run_golden)
@@ -1156,6 +1162,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--start-url", default="", help="browser 域：覆盖起始页")
     p.add_argument("--channel", default="chrome")
     p.add_argument("--run-id", default="")
+    p.add_argument("--profile", default="", help="持久化浏览器配置目录（要登录的系统用）")
     p.add_argument("--cwd", default="", help="cli 域：命令的工作目录")
     p.add_argument("--timeout", type=int, default=60, help="cli 域：单条命令超时秒数")
     p.set_defaults(func=cmd_run)
@@ -1199,6 +1206,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--resume", action="store_true", help="跳过上次已成功的条目")
     p.add_argument("--cwd", default="", help="cli 域：命令的工作目录")
     p.add_argument("--timeout", type=int, default=60, help="cli 域：单条命令超时秒数")
+    p.add_argument("--profile", default="", help="持久化浏览器配置目录（要登录的系统用）")
     p.add_argument("--canary", action="store_true",
                    help="按灰度权重把条目路由到候选版本（需先 canary start）")
     p.add_argument("--channel", default="chrome")
@@ -1210,6 +1218,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skill-id", default="demo")
     p.add_argument("--settle", type=int, default=600, help="每个动作后等页面稳定的毫秒数")
     p.add_argument("--channel", default="chrome")
+    p.add_argument("--profile", default="", help="持久化浏览器配置目录（要登录的系统用：登录一次，以后都带这个身份）")
     p.add_argument("--headless", action="store_true", help="无头模式（一般人不用开）")
     p.set_defaults(func=cmd_record)
 
@@ -1222,6 +1231,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--channel", default="chrome")
     p.add_argument("--dry-run", action="store_true", help="只试补丁、不落库")
+    p.add_argument("--profile", default="", help="持久化浏览器配置目录（要登录的系统用）")
     p.add_argument("--signal-threshold", type=int, default=5,
                    help="technical 探针连续失败多少次升格告警")
     p.set_defaults(func=cmd_heal)

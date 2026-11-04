@@ -110,9 +110,17 @@ class PlaywrightPage:
 
 @contextlib.asynccontextmanager
 async def launch_page(
-    *, channel: str = "chrome", headless: bool = True
+    *,
+    channel: str = "chrome",
+    headless: bool = True,
+    profile_dir: str | None = None,
 ) -> AsyncIterator[PlaywrightPage]:
-    """起一个真浏览器页面。channel 用系统已装的 Chrome/Edge，免下载 ~130MB。"""
+    """起一个真浏览器页面。channel 用系统已装的 Chrome/Edge，免下载 ~130MB。
+
+    `profile_dir` 给需要登录的系统用：传一个目录，浏览器就使用持久化配置，
+    登录一次之后 Cookie 留在里面，后续每次跑都还是你那个身份。
+    不传则用全新临时配置（默认，干净但每次都是"未登录"）。
+    """
     from ..pwtmp import ensure_playwright_temp
 
     # 必须在 playwright 启动前做：它会在 TMP 下建 playwright-artifacts-*
@@ -121,6 +129,19 @@ async def launch_page(
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
+        if profile_dir:
+            context = await p.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                channel=channel,
+                headless=headless,
+            )
+            try:
+                page = context.pages[0] if context.pages else await context.new_page()
+                yield PlaywrightPage(page)
+            finally:
+                await context.close()
+            return
+
         browser = await p.chromium.launch(channel=channel, headless=headless)
         try:
             page = await browser.new_page()
