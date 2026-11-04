@@ -187,6 +187,23 @@ def format_checks(checks: list[Check]) -> str:
     return "\n".join(lines)
 
 
+def summary_line(checks: list[Check]) -> str:
+    """一句话结论。用户不需要数方括号，看这一行就够。"""
+    total = len(checks)
+    passed = sum(1 for c in checks if c.status == OK)
+    failed = [c.name for c in checks if c.status == FAIL]
+    warned = [c.name for c in checks if c.status == WARN]
+
+    if not failed and not warned:
+        return f"结果：{total} 项全部通过 —— 可以开始录演示了"
+    if not failed:
+        return f"结果：{total} 项里 {passed} 项通过，{len(warned)} 项存疑（{'、'.join(warned)}）—— 可以先跑，注意着来"
+    return (
+        f"结果：{total} 项里 {passed} 项通过，{len(failed)} 项没通"
+        f"（{'、'.join(failed)}）—— 先把这几项弄通"
+    )
+
+
 def worst(checks: list[Check]) -> str:
     if any(c.status == FAIL for c in checks):
         return FAIL

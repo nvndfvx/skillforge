@@ -374,17 +374,17 @@ def cmd_signals(args: argparse.Namespace) -> int:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     """环境自检：把每一环拆开验，说清哪一环没通、该怎么办。"""
-    from .doctor import FAIL, HEADER, format_checks, run_checks, worst
+    from .doctor import FAIL, HEADER, format_checks, run_checks, summary_line, worst
 
     print(HEADER + "\n")
     checks = run_checks(channel=args.channel, deep=not args.shallow)
     print(format_checks(checks))
     level = worst(checks)
     print()
+    print(summary_line(checks))
     if level == FAIL:
-        print("结论：有环节没通 —— 按上面带 → 的提示处理；还不行就把这段输出发我。")
+        print("（按上面带 → 的提示处理；还不行就把整屏发我）")
         return 1
-    print("结论：都通了，可以开始录演示。")
     return 0
 
 
