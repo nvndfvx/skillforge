@@ -1,4 +1,4 @@
-# 本地依赖（不写 C 盘用户目录）
+﻿# 本地依赖（不写 C 盘用户目录）
 vendor/
 .wheels/
 .browsers/
@@ -7,3 +7,9 @@ vendor/
 # Python
 __pycache__/
 *.pyc
+demos/
+skill.json
+scores.json
+store/
+report.json
+cases.json
