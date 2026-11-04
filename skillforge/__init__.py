@@ -4,4 +4,4 @@
 只有真正控制浏览器的层（executor/playwright_page.py）需要 playwright。
 """
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"

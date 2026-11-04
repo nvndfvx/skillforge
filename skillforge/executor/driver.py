@@ -1,4 +1,4 @@
-"""执行器：把 Skill 跑在 PageAdapter 上，逐步校验断言与幂等。
+﻿"""执行器：把 Skill 跑在 PageAdapter 上，逐步校验断言与幂等。
 
 失败分层写在 StepResult.failure_layer 里，Healer 直接拿它做三层定位：
   param     参数缺失/类型错
@@ -102,14 +102,32 @@ def render(value: Any, params: Mapping[str, Any]) -> Any:
     return _TEMPLATE.sub(repl, value)
 
 
+def render_target(target: Locator | None, params: Mapping[str, Any] | None) -> Locator | None:
+    """把定位器里的 `{{参数}}` 渲染成实际值。
+
+    为什么需要：真实系统里"点哪一行"是靠行文字里的业务单号定位的。
+    如果单号写死在定位器里，这个技能就只能处理那一单 —— 换一条就得重录。
+    渲染之后，同一份技能传不同的单号就能处理不同记录。
+    """
+    if target is None or not params:
+        return target
+    name = target.name or ""
+    if "{{" not in name:
+        return target
+    import dataclasses
+
+    rendered = render(name, params)
+    return dataclasses.replace(target, name=str(rendered))
+
+
 async def resolve_locator(
-    step: Step, page: PageAdapter
+    step: Step, page: PageAdapter, params: Mapping[str, Any] | None = None
 ) -> tuple[Locator | None, bool, str]:
     """先试原定位器，失败则按元素指纹重匹配（地基② 的运行时价值）。
 
     返回 (locator, healed, detail)。
     """
-    target = step.target
+    target = render_target(step.target, params)
     if target is not None and not target.is_empty():
         if await page.exists(target):
             # 写操作必须唯一命中。真实浏览器上 role+name 是**子串**匹配，
@@ -193,7 +211,7 @@ async def run_step(step: Step, params: Mapping[str, Any], page: PageAdapter) -> 
         if step.action is ActionKind.GOTO:
             await page.goto(str(value or ""))
         elif step.action in (ActionKind.CLICK, ActionKind.SUBMIT):
-            locator, healed, detail = await resolve_locator(step, page)
+            locator, healed, detail = await resolve_locator(step, page, params)
             if locator is None:
                 result.status = "failed"
                 result.failure_layer = "locator"
@@ -203,7 +221,7 @@ async def run_step(step: Step, params: Mapping[str, Any], page: PageAdapter) -> 
             result.detail = detail
             await page.click(locator)
         elif step.action in (ActionKind.FILL, ActionKind.SELECT):
-            locator, healed, detail = await resolve_locator(step, page)
+            locator, healed, detail = await resolve_locator(step, page, params)
             if locator is None:
                 result.status = "failed"
                 result.failure_layer = "locator"

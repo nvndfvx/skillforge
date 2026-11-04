@@ -50,7 +50,24 @@ def test_infers_when_param_shares_shape():
     assert check.param == "任务号"
     # 形态要泛化：不能把 R-20240115 写死成字面量
     assert "20240115" not in check.pattern
-    assert warnings == []
+    # 点击目标也要参数化，否则换一条记录就得重录
+    assert steps[0].target.name == "任务 {{任务号}} 待审核"
+    assert any("已参数化" in w for w in warnings)
+
+
+def test_locator_template_renders_at_runtime():
+    """参数化之后，执行时定位器必须能渲染成真实文本。"""
+    from skillforge.executor.driver import render_target
+
+    target = Locator(role="link", name="任务 {{任务号}} 待审核")
+    rendered = render_target(target, {"任务号": "R-20240116"})
+    assert rendered is not None
+    assert rendered.name == "任务 R-20240116 待审核"
+    # 没有参数时保持原样，不能把模板当字面量去搜
+    assert render_target(target, {}) is target
+    # 不含模板的定位器不该被改动
+    plain = Locator(role="button", name="提交")
+    assert render_target(plain, {"任务号": "R-1"}) is plain
 
 
 def test_never_invents_when_no_param_matches():

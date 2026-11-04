@@ -1,4 +1,4 @@
-"""真浏览器验证：多标签页录制 + 执行。
+﻿"""真浏览器验证：多标签页录制 + 执行。
 
     python scripts/check_multitab.py
 
@@ -126,6 +126,20 @@ async def check_entity_match() -> bool:
     return good.ok
 
 
+async def check_templated_click() -> bool:
+    """参数化定位器：同一份技能传不同任务号，能点中不同行并打开新标签页。"""
+    skill = make_skill()
+    skill.steps[1].target = Locator(role="link", name="任务 {{任务号}} 待审核")
+    skill.parameters.append(Parameter(name="任务号", type="string"))
+
+    async with launch_page(channel="chrome", headless=True) as page:
+        run = await execute(skill, {"客户名称": "张三", "任务号": "R-20240116"}, page, run_id="tpl")
+
+    mark = "v" if run.ok else "x"
+    print(f"  {mark} 「任务 {{{{任务号}}}} 待审核」+ 任务号=R-20240116 → ok={run.ok}")
+    return run.ok
+
+
 async def main() -> int:
     print("== 1) 多标签录制 ==")
     tabs = await record_multi_tab()
@@ -155,9 +169,14 @@ async def main() -> int:
         return 1
     print("   OK 实体号相符 → 通过")
 
-    print("\n全部通过：多标签录制/执行 + 跨页关联判据都成立。")
-    return 0
+    print("\n== 5) 参数化定位器：换记录不用重录 ==")
+    if not await check_templated_click():
+        print("FAIL 参数化的点击没点中")
+        return 1
+    print("   OK 模板定位器渲染后命中目标行")
 
+    print("\n全部通过：多标签 + 跨页关联 + 参数化定位器。")
+    return 0
 
 if __name__ == "__main__":
     raise SystemExit(asyncio.run(main()))

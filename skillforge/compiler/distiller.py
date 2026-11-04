@@ -1,4 +1,4 @@
-﻿"""蒸馏器：对齐报告 → Skill 草稿。
+"""蒸馏器：对齐报告 → Skill 草稿。
 
 职责边界（刻意克制）：
   - 只做「确定性的转换」：变量→参数、动作→步骤、指纹→定位器、写副作用打标。
@@ -177,11 +177,25 @@ def infer_entity_checks(
         pattern = entity_regex(token)
         matched = [name for name, example in param_examples.items() if re.search(pattern, example or "")]
         if len(matched) == 1:
+            param_name = matched[0]
             step.entity_check = EntityCheck(
                 pattern=pattern,
-                param=matched[0],
-                note=f"自动推断：由「{token}」同形匹配到参数「{matched[0]}」",
+                param=param_name,
+                note=f"自动推断：由「{token}」同形匹配到参数「{param_name}」",
             )
+            # 顺手把「点哪一行」也参数化：单号写死在定位器里，这份技能就只能
+            # 处理那一单，换一条记录就得重录 —— 那就谈不上复用了。
+            opener_name = opener.target.name or ""
+            if token in opener_name:
+                import dataclasses
+
+                opener.target = dataclasses.replace(
+                    opener.target, name=opener_name.replace(token, "{{" + param_name + "}}")
+                )
+                warnings.append(
+                    f"step {opener.step_id} 的定位文本已参数化："
+                    f"「{opener_name}」→「{opener.target.name}」，换记录只需改参数。"
+                )
             added += 1
         else:
             hint = "多个参数都像" if matched else "没有任何参数带着这个实体号"
