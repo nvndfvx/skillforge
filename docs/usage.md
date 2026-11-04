@@ -382,6 +382,78 @@ skillforge review --skill skill.json --serve
 - **只绑 127.0.0.1**，并且只服务到提交为止，不长期驻留
 - 想留档：`skillforge review --skill skill.json --export-html form.html` 导出静态页（只读）
 
+### 4.13 多技能编排：上一步的产出当下一步的入参
+
+一个任务常常要跨好几个技能："先查库存 → 再下采购单 → 最后发通知"。
+
+写一份 `flow.json`（示例见 [../examples/flow.example.json](../examples/flow.example.json)）：
+
+```json
+{
+  "flow_id": "purchase",
+  "params": { "客户名称": "张三" },
+  "steps": [
+    { "step_id": "query", "skill_id": "inventory_query", "params": { "物料编码": "SKU-001" } },
+    { "step_id": "order", "skill_id": "purchase_order",
+      "params": { "客户名称": "{{params.客户名称}}", "关联单号": "{{steps.query.entity}}" } },
+    { "step_id": "notify", "skill_id": "notify_wecom",
+      "params": { "内容": "采购单 {{steps.order.entity}} 已创建" }, "optional": true }
+  ]
+}
+```
+
+**先静态校验，不用浏览器**：
+
+```bash
+skillforge flow validate --flow flow.json --store ./store
+```
+
+它会一次性报出所有毛病：技能没发布、step_id 重名、**引用了后面的步骤**、引用了没定义的 flow 参数、
+必填参数没给。**这些错全部能在跑之前发现**，不该等到开浏览器才炸。
+
+**再跑**：
+
+```bash
+skillforge flow run --flow flow.json --store ./store --out flow-report.json
+```
+
+#### 三种引用
+
+| 写法 | 意思 |
+|---|---|
+| `{{params.客户名称}}` | flow 级参数 |
+| `{{steps.query.entity}}` | 上一步捞到的**业务单号**（按业务断言的锚点正则匹配） |
+| `{{steps.query.params.金额}}` | 上一步实际用过的入参 |
+| `{{flow_run_id}}` | 整条流的运行标识 |
+
+整串就是一个引用时**保留原类型**（`"{{params.数量}}"` 拿到的是数字 `3`，不是字符串）。
+
+#### 三条与 batch 相反的规则
+
+| | batch | flow |
+|---|---|---|
+| 失败后 | 继续跑下一条 | **中止**（默认），后面标 skipped |
+| 为什么 | 条目互不依赖 | 后面依赖前面的产出，硬跑等于拿空参数做错事 |
+| 例外 | —— | 标 `"optional": true` 的步骤失败不中止，但整条流仍算未完成 |
+
+**不做分布式事务**：浏览器里的写操作没有回滚。所以中止时报告会明确列出
+「已完成 / 已失败 / 未执行」，由人决定后面怎么办 —— 假装能回滚比不能回滚更危险。
+
+#### 报告长这样
+
+```
+编排 purchase：
+  v query        inventory_query   ok        → 产出 R-20240115
+  v order        purchase_order    ok        → 产出 R-20240116
+  x notify       notify_wecom      failed    webhook 超时
+
+中止于 （可失败步骤）
+  已完成：['query', 'order']
+  已失败：['notify']
+  未执行：[]
+  注意：浏览器里的写操作**没有回滚**，已经做成的那几步请人工确认后再决定怎么办
+```
+
 ---
 
 ## 5. 数据落在哪

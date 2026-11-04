@@ -1,0 +1,31 @@
+{
+  "flow_id": "purchase",
+  "name": "采购：查库存 → 下采购单 → 发通知",
+  "params": {
+    "客户名称": "张三"
+  },
+  "steps": [
+    {
+      "step_id": "query",
+      "skill_id": "inventory_query",
+      "params": { "物料编码": "SKU-001" },
+      "note": "查库存，产出可能带单号"
+    },
+    {
+      "step_id": "order",
+      "skill_id": "purchase_order",
+      "params": {
+        "客户名称": "{{params.客户名称}}",
+        "关联单号": "{{steps.query.entity}}"
+      },
+      "note": "上一步的单号当这一步的入参 —— 这就是编排的全部价值"
+    },
+    {
+      "step_id": "notify",
+      "skill_id": "notify_wecom",
+      "params": { "内容": "采购单 {{steps.order.entity}} 已创建" },
+      "optional": true,
+      "note": "通知失败不该让整条流算失败"
+    }
+  ]
+}

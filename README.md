@@ -79,7 +79,7 @@
 ```bash
 git clone https://github.com/nvndfvx/skillforge.git
 cd skillforge
-python tests/run_all.py          # 135 个测试全过，零第三方依赖
+python tests/run_all.py          # 151 个测试全过，零第三方依赖
 python examples/demo_loop.py     # 端到端闭环演示（不用浏览器）
 ```
 
@@ -93,7 +93,7 @@ pip install git+https://github.com/nvndfvx/skillforge.git
 skillforge --help
 ```
 
-装完就有一个 `skillforge` 命令，11 个子命令见下面「命令行」。
+装完就有一个 `skillforge` 命令，13 个子命令见下面「命令行」。
 
 ### 方式三：要真的控制浏览器（录制 / 真跑 / 自动修）
 
@@ -112,7 +112,7 @@ python scripts/bootstrap_playwright.py
 
 ```bash
 skillforge --help                              # 命令能出来
-python tests/run_all.py                        # 135 个测试全过
+python tests/run_all.py                        # 151 个测试全过
 python tests/test_real_browser.py              # 真浏览器 27 项（没装 playwright 会 SKIP）
 ```
 
@@ -162,15 +162,15 @@ skillforge release --store ./store --skill skill.json --scores scores.json
 
 | | |
 |---|---|
-| 离线测试 | **135 个**，零第三方依赖（`python tests/run_all.py`） |
+| 离线测试 | **151 个**，零第三方依赖（`python tests/run_all.py`） |
 | 真浏览器检查 | **27 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
 | CI | ubuntu + windows × Python 3.10/3.12，全绿 |
 | 闭环 | 录制 → 对齐 → 编译 → 人审三道勾 → 基准集跑批 → 过闸发布 → 自动打补丁 → 回滚 |
-| 还缺 | 多技能编排（现在一次只跑一个技能） |
+| 还缺 | 并行分支与条件跳转（编排现在只有串行） |
 
 ## 命令行
 
-12 个子命令，覆盖闭环每一步。完整教程见 [docs/usage.md](docs/usage.md)。
+13 个子命令，覆盖闭环每一步。完整教程见 [docs/usage.md](docs/usage.md)。
 
 ```bash
 # 1. 录演示：打开浏览器，你操作一遍，录成 Trace.json（要 playwright）
@@ -228,6 +228,10 @@ python -m skillforge batch --store ./store --skill skill.json \
 python -m skillforge canary status --store ./store --skill-id expense
 python -m skillforge canary promote --store ./store --skill-id expense --scores scores.json
 python -m skillforge canary abort  --store ./store --skill-id expense
+
+# 11. 多技能编排：上一步的产出当下一步的入参
+python -m skillforge flow validate --flow flow.json --store ./store   # 静态校验，不用浏览器
+python -m skillforge flow run      --flow flow.json --store ./store --out flow-report.json
 ```
 
 ## 架构

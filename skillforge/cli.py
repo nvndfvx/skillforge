@@ -372,6 +372,119 @@ def cmd_signals(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_flow(args: argparse.Namespace) -> int:
+    """多技能编排：先查 → 再下单 → 再通知。"""
+    from .flow import Flow
+
+    store = SkillStore(args.store)
+    try:
+        flow = Flow.from_dict(json.loads(Path(args.flow).read_text(encoding="utf-8")))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"编排文件读不了：{exc}")
+        return 1
+
+    skills: dict[str, Any] = {}
+    missing: list[str] = []
+    for step in flow.steps:
+        if step.skill_id in skills or step.skill_id in missing:
+            continue
+        skill = store.load_skill(step.skill_id)
+        if skill is None:
+            missing.append(step.skill_id)
+        else:
+            skills[step.skill_id] = skill
+    if missing:
+        print(f"库里没有这些技能的已发布版本：{missing}")
+        print("  先给它们 release，编排才能引用 —— 不允许拿草稿编排")
+        return 1
+
+    problems = flow.validate(skills)
+    if problems:
+        _print_list("编排有问题", problems)
+        return 1
+
+    if args.action == "validate":
+        print(f"编排 OK：{flow.flow_id}（{len(flow.steps)} 步，技能 {sorted(skills)}）")
+        for index, step in enumerate(flow.steps, start=1):
+            flag = "  [可失败]" if step.optional else ""
+            print(
+                f"  {index}. {step.step_id} → {step.skill_id} "
+                f"v{skills[step.skill_id].version}{flag}"
+            )
+            if step.params:
+                print(f"       params={json.dumps(step.params, ensure_ascii=False)}")
+        return 0
+
+    if not args.out:
+        print("run 需要 --out <报告路径>")
+        return 1
+
+    try:
+        flow_params = json.loads(args.params) if args.params else {}
+    except json.JSONDecodeError as exc:
+        print(f"--params 不是合法 JSON：{exc}")
+        return 1
+
+    from playwright.async_api import async_playwright
+
+    from .executor.playwright_page import PlaywrightPage
+    from .flow import run_flow
+
+    async def flow_it():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(channel=args.channel, headless=True)
+            try:
+
+                async def factory(step):
+                    return PlaywrightPage(await browser.new_page())
+
+                async def teardown(adapter):
+                    await adapter.page.close()
+
+                return await run_flow(
+                    flow,
+                    skills,
+                    factory,
+                    params=flow_params,
+                    flow_run_id=args.run_id or f"flow::{flow.flow_id}",
+                    teardown=teardown,
+                    interval_ms=args.interval_ms,
+                )
+            finally:
+                await browser.close()
+
+    try:
+        result = asyncio.run(flow_it())
+    except Exception as exc:  # noqa: BLE001
+        print(f"编排执行失败：{type(exc).__name__}: {str(exc)[:200]}")
+        print("若报 No module named 'playwright'，先装：pip install \"skillforge[browser]\"")
+        return 1
+
+    Path(args.out).write_text(
+        json.dumps(result.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    print(f"\n编排 {flow.flow_id}：")
+    for step in result.steps:
+        mark = {"ok": "v", "failed": "x", "skipped": "-"}[step.status]
+        extra = f"  {step.detail[:90]}" if step.detail else ""
+        outputs = step.outputs.get("entity")
+        tail = f"  → 产出 {outputs}" if outputs else ""
+        print(f"  {mark} {step.step_id:12s} {step.skill_id:12s} {step.status:8s}{tail}{extra}")
+
+    done = [s.step_id for s in result.done]
+    if result.ok:
+        print(f"\n完成：{len(done)} 步全成功")
+        return 0
+    print(f"\n中止于 {result.aborted_at or '（可失败步骤）'}")
+    print(f"  已完成：{done}")
+    print(f"  已失败：{[s.step_id for s in result.failed]}")
+    print(f"  未执行：{[s.step_id for s in result.skipped]}")
+    print("  注意：浏览器里的写操作**没有回滚**，已经做成的那几步请人工确认后再决定怎么办")
+    print(f"  报告 → {args.out}")
+    return 1
+
+
 def cmd_canary(args: argparse.Namespace) -> int:
     """灰度发布：候选版本先接一小部分真实请求。"""
     from .canary import CanaryBook, CanaryState
@@ -903,6 +1016,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--threshold", type=int, default=5,
                    help="technical 探针连续失败多少次升格告警")
     p.set_defaults(func=cmd_run_golden)
+
+    p = sub.add_parser("flow", help="多技能编排：上一步的产出当下一步的入参")
+    p.add_argument("action", choices=["run", "validate"])
+    p.add_argument("--flow", required=True, help="编排文件 JSON")
+    p.add_argument("--store", required=True)
+    p.add_argument("--params", default="", help="flow 级参数 JSON")
+    p.add_argument("--out", default="", help="run 用：报告输出路径")
+    p.add_argument("--run-id", default="", help="run 用：整条流的运行标识")
+    p.add_argument("--interval-ms", type=int, default=0)
+    p.add_argument("--channel", default="chrome")
+    p.set_defaults(func=cmd_flow)
 
     p = sub.add_parser("canary", help="灰度发布：候选版本先接一小部分真实请求")
     p.add_argument("action", choices=["start", "status", "promote", "abort"])
