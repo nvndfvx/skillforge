@@ -1,4 +1,4 @@
-﻿# SkillForge
+# SkillForge
 
 [![ci](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml/badge.svg)](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml)
 
@@ -79,7 +79,7 @@
 ```bash
 git clone https://github.com/nvndfvx/skillforge.git
 cd skillforge
-python tests/run_all.py          # 110 个测试全过，零第三方依赖
+python tests/run_all.py          # 126 个测试全过，零第三方依赖
 python examples/demo_loop.py     # 端到端闭环演示（不用浏览器）
 ```
 
@@ -112,7 +112,7 @@ python scripts/bootstrap_playwright.py
 
 ```bash
 skillforge --help                              # 命令能出来
-python tests/run_all.py                        # 110 个测试全过
+python tests/run_all.py                        # 126 个测试全过
 python tests/test_real_browser.py              # 真浏览器 27 项（没装 playwright 会 SKIP）
 ```
 
@@ -162,15 +162,15 @@ skillforge release --store ./store --skill skill.json --scores scores.json
 
 | | |
 |---|---|
-| 离线测试 | **110 个**，零第三方依赖（`python tests/run_all.py`） |
+| 离线测试 | **126 个**，零第三方依赖（`python tests/run_all.py`） |
 | 真浏览器检查 | **27 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
 | CI | ubuntu + windows × Python 3.10/3.12，全绿 |
 | 闭环 | 录制 → 对齐 → 编译 → 人审三道勾 → 基准集跑批 → 过闸发布 → 自动打补丁 → 回滚 |
-| 还缺 | 灰度发布、人审 Web UI |
+| 还缺 | 人审 UI 支持改步骤（现在只能确认）、按用户分群的灰度 |
 
 ## 命令行
 
-11 个子命令，覆盖闭环每一步。完整教程见 [docs/usage.md](docs/usage.md)。
+12 个子命令，覆盖闭环每一步。完整教程见 [docs/usage.md](docs/usage.md)。
 
 ```bash
 # 1. 录演示：打开浏览器，你操作一遍，录成 Trace.json（要 playwright）
@@ -181,8 +181,9 @@ python -m skillforge record --url "https://your-erp/new" --out demos/a.json --sk
 python -m skillforge compile --trace-a demos/a.json --trace-b demos/b.json \
     --out skill.json --skill-id expense --name 报销单录入
 
-# 3. 交互式人审：三道勾逐条确认（别背参数）
-python -m skillforge review --skill skill.json -i
+# 3. 人审三道勾：两种方式选一个
+python -m skillforge review --skill skill.json -i          # 逐条交互（终端）
+python -m skillforge review --skill skill.json --serve     # 本地网页点选（纯 stdlib）
 
 # 4. 建回归基准集（只增不删）
 python -m skillforge golden add --store ./store --skill-id expense \
@@ -215,6 +216,15 @@ python -m skillforge signals --store ./store --skill-id expense --reset   # 人�
 python -m skillforge batch --store ./store --skill skill.json \
     --cases cases.json --out report.json --resume --interval-ms 800
 #    cases.json: [{"item_id":"s1","params":{"客户名称":"张三","金额":"500"}}, ...]
+
+# 10. 灰度发布：新版本先接 10% 真实请求，样本够了再 promote
+python -m skillforge canary start --store ./store --skill-id expense \
+    --candidate skill-v1.1.json --weight 0.1 --min-samples 20
+python -m skillforge batch --store ./store --skill skill.json \
+    --cases cases.json --out report.json --canary        # 按 item_id 粘性分流
+python -m skillforge canary status --store ./store --skill-id expense
+python -m skillforge canary promote --store ./store --skill-id expense --scores scores.json
+python -m skillforge canary abort  --store ./store --skill-id expense
 ```
 
 ## 架构
@@ -349,9 +359,11 @@ skillforge/
 │   └── suggest.py     从参数生成候选用例（origin=manual_edge，需人确认）
 ├── registry.py        版本库：发布闸（GateRejected）、回滚、Golden Set 只增不删
 ├── batch.py           批量执行：失败隔离 + 断点续跑 + 节流
+├── canary.py          灰度：粘性分桶路由 + 按版本统计 + promote/abort 判定
+├── webui.py           人审网页（纯标准库 http.server，只绑 127.0.0.1）
 ├── signals.py         technical 探针的连续失败累积告警（H14，只喊不改）
 ├── cli.py             命令行（record/compile/review/golden/run-golden/release/
-│                      rollback/status/batch/heal/signals 共 11 个）
+│                      rollback/status/canary/batch/heal/signals 共 12 个）
 ├── testing.py         FakePage（tests 与 examples 共用）
 ├── scripts/
 │   └── bootstrap_playwright.py  把 playwright 装进 vendor/（绕开 pip 临时目录问题）
@@ -374,6 +386,8 @@ skillforge/
     ├── test_healer.py
     ├── test_signals.py
     ├── test_batch.py
+    ├── test_canary.py
+    ├── test_webui.py
     ├── test_cli.py
     └── test_real_browser.py
 ```

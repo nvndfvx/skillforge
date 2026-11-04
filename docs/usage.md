@@ -98,7 +98,7 @@ export PYTHONPATH="<repo>/vendor"
 
 | 命令 | 期望 |
 |---|---|
-| `skillforge --help` | 列出 11 个子命令 |
+| `skillforge --help` | 列出 12 个子命令 |
 | `python tests/run_all.py` | `全部通过（9 个文件）` |
 | `python tests/test_real_browser.py` | 有浏览器：`27/27 checks passed`；没装：`SKIP` |
 | `python -m skillforge status --store ./store --skill-id demo` | 打印一段 JSON，`releases: []` |
@@ -280,6 +280,77 @@ skillforge batch --store ./store --skill skill.json \
 
 > 续跑只记**成功**的条目，失败的会重试。跳过的条目**不进通过率分母**，
 > 否则续跑越多次，通过率越虚高。
+
+### 4.11 灰度发布：先 10%，再全量
+
+新版本直接全量上，出问题就是"所有单都做错了"。灰度让候选版本先接一小部分：
+
+```bash
+# 1) 开灰度：候选接 10%，候选满 20 条样本才给结论
+skillforge canary start --store ./store --skill-id expense \
+    --candidate skill-v1.1.json --weight 0.1 --min-samples 20
+
+# 2) 干活时按灰度权重分流（同一条单永远走同一个版本）
+skillforge batch --store ./store --skill skill.json \
+    --cases cases.json --out report.json --canary
+
+# 3) 看结论
+skillforge canary status --store ./store --skill-id expense
+```
+
+`status` 会给出三种结论之一：
+
+| 结论 | 含义 | 该做什么 |
+|---|---|---|
+| `wait` | 候选样本还不够 | 再跑几批 |
+| `promote` | 候选不比稳定版差，样本够了 | 过闸后提升 |
+| `abort` | 候选更差 | 撤回 |
+
+**提升仍然要过发布闸**：
+
+```bash
+skillforge canary promote --store ./store --skill-id expense --scores scores.json
+```
+
+> 为什么两道都要：灰度证明"真实数据上没更差"，闸证明"基准集上没退化"。
+> 少任何一道，你都不知道自己是运气好还是真的好。
+
+不想继续了：
+
+```bash
+skillforge canary abort --store ./store --skill-id expense
+```
+
+**三个不变量**（破坏了灰度就没意义）：
+
+1. **按 key 粘性路由**：`hash(skill_id::item_id)` 分桶，同一条单永远同一个版本。
+   用随机数会让同一张单被两个版本各提交一次。
+2. **统计按版本分开**：候选的失败绝不算到稳定版头上。
+3. **灰度不替代闸**：`promote` 必须有 `--scores`。
+
+### 4.12 人审 Web UI：网页点选，不用背参数
+
+```bash
+skillforge review --skill skill.json --serve
+# → 人审页面：http://127.0.0.1:8765/
+```
+
+浏览器打开后是三段：
+
+- **① 步骤清单**（表格，写操作单独标出）→ 勾一句"这就是我要的流程"
+- **② 断言**：每条一对"对/不对"单选
+- **③ 写操作 precheck**：每个写步骤一个输入框，默认值已填好
+
+点「提交人审结果」→ 写盘 → 页面显示三道勾状态和剩余阻断 → **服务自动退出**。
+
+几个细节：
+
+- **纯标准库**，没有第三方依赖，断网也能用
+- **只绑 127.0.0.1**，并且只服务到提交为止，不长期驻留
+- 想留档：`skillforge review --skill skill.json --export-html form.html` 导出静态页（只读）
+
+> **刻意不支持"跳过步骤"**：删一步要重排 `step_id` 和 `idempotency_key`，
+> 让 UI 顺手改会埋坑。要改步骤就回去改 `skill.json`，再重新人审。
 
 ---
 

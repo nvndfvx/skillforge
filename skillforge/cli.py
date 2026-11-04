@@ -184,8 +184,44 @@ def _review_interactive(skill, args: argparse.Namespace) -> int:
     return 0 if not blockers else 1
 
 
+def _finish_review(skill, out: Path) -> int:
+    """收尾：状态由三道勾推导 → 写盘 → 打印结论。"""
+    checklist = skill.review_checklist()
+    skill.state = "reviewed" if all(checklist.values()) else "draft"
+    blockers = skill.publish_blockers()
+    save_skill(skill, out)
+
+    print("\n人审三道勾：")
+    for label, ok in checklist.items():
+        print(f"  [{'x' if ok else ' '}] {label}")
+    print(f"状态：{skill.state}")
+    _print_list("还剩的发布阻断", blockers)
+    if not blockers:
+        print("→ 可以 release 了")
+    return 0 if not blockers else 1
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     skill = load_skill(args.skill)
+
+    if getattr(args, "export_html", ""):
+        from .webui import dump_form
+
+        path = dump_form(skill, args.export_html)
+        print(f"表单已导出：{path}")
+        print("  静态页只能看、不能提交；要真提交用 --serve")
+        return 0
+
+    if getattr(args, "serve", False):
+        from .webui import serve
+
+        out = Path(args.out or args.skill)
+        save_skill(skill, out)  # 先把当前内容落盘，页面里看到的就是这一版
+        session = serve(skill, out, port=args.port, open_browser=not args.no_browser)
+        if not session.submitted:
+            print("没有提交，技能文件保持原样。")
+            return 1
+        return _finish_review(session.skill, out)
 
     if getattr(args, "interactive", False):
         return _review_interactive(skill, args)
@@ -336,6 +372,117 @@ def cmd_signals(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_canary(args: argparse.Namespace) -> int:
+    """灰度发布：候选版本先接一小部分真实请求。"""
+    from .canary import CanaryBook, CanaryState
+
+    store = SkillStore(args.store)
+    book = CanaryBook(store.root)
+    skill_id = args.skill_id
+
+    if args.action == "start":
+        if not args.candidate:
+            print("start 需要 --candidate <候选技能.json>")
+            return 1
+        if not 0 < args.weight < 1:
+            print("--weight 必须在 (0,1) 之间，例如 0.1")
+            return 1
+        current = store.current_record(skill_id)
+        if current is None:
+            print("库里没有已发布版本，先 release 一版再开灰度")
+            return 1
+        try:
+            candidate = load_skill(args.candidate)
+        except Exception as exc:  # noqa: BLE001
+            print(f"候选技能读不了：{type(exc).__name__}: {exc}")
+            return 1
+        if candidate.version == current.version:
+            print(f"候选版本号和当前版本一样（{current.version}），改一下 version 再开灰度")
+            return 1
+        if candidate.publish_blockers():
+            _print_list("候选技能还有发布阻断（先 review）", candidate.publish_blockers())
+            return 1
+
+        book.candidate_path(skill_id).parent.mkdir(parents=True, exist_ok=True)
+        book.candidate_path(skill_id).write_text(
+            json.dumps(candidate.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        state = CanaryState(
+            skill_id=skill_id,
+            candidate_version=candidate.version,
+            weight=args.weight,
+            min_samples=args.min_samples,
+        )
+        state.created_at = state.to_dict()["created_at"]
+        book.save(state)
+        print(f"灰度已开启：{current.version}（稳定） ← {int(args.weight * 100)}% → {candidate.version}（候选）")
+        print(f"  路由方式：hash(skill_id::item_id) 分桶，同一个 item 永远走同一个版本")
+        print(f"  样本门槛：候选满 {args.min_samples} 条才给结论")
+        print(f"  下一步：skillforge batch --canary ... 然后 skillforge canary status")
+        return 0
+
+    state = book.load(skill_id)
+
+    if args.action == "abort":
+        if state is None:
+            print("当前没有灰度")
+            return 0
+        book.clear(skill_id)
+        print(f"灰度已撤销，回收了 {state.candidate_version} 的 {int(state.weight * 100)}% 流量")
+        return 0
+
+    if state is None:
+        print("当前没有灰度（用 canary start 开启）")
+        return 0
+
+    current = store.current_record(skill_id)
+    stable_version = current.version if current else "-"
+
+    if args.action == "status":
+        verdict = state.verdict(stable_version)
+        print(json.dumps(
+            {
+                "skill_id": skill_id,
+                "candidate_version": state.candidate_version,
+                "weight": state.weight,
+                "samples": state.samples,
+                **verdict,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ))
+        print(f"\n结论：{verdict['decision']} —— {verdict['reason']}")
+        return 0
+
+    # promote
+    verdict = state.verdict(stable_version)
+    print(f"灰度结论：{verdict['decision']} —— {verdict['reason']}")
+    if not verdict["enough_samples"] and not args.force:
+        print(f"候选样本不足（{verdict['candidate']['samples']}/{state.min_samples}），"
+              f"再跑几批，或加 --force 强行提升")
+        return 1
+    if verdict["decision"] == "abort" and not args.force:
+        print("候选更差，拒绝提升（确实要提升就加 --force）")
+        return 1
+    if not args.scores:
+        print("promote 仍需过发布闸：请提供 --scores <scores.json>")
+        print("  灰度只证明「真实数据上没更差」，闸才证明「基准集上没退化」")
+        return 1
+
+    candidate = load_skill(book.candidate_path(skill_id))
+    scores = _load_scores(args.scores)
+    try:
+        record = store.release(candidate, scores)
+    except GateRejected as exc:
+        print("发布闸拒绝，灰度保持原样：")
+        _print_list("原因", exc.gate.reasons)
+        return 1
+
+    book.clear(skill_id)
+    print(f"已提升 {candidate.skill_id} v{record.version}（通过率 {record.rate:.3f}），灰度已结束")
+    return 0
+
+
 def cmd_batch(args: argparse.Namespace) -> int:
     """批量干活：失败隔离 + 断点续跑（需要真浏览器）。"""
     from playwright.async_api import async_playwright
@@ -364,6 +511,21 @@ def cmd_batch(args: argparse.Namespace) -> int:
             print(f"续跑：{len(checkpoint)} 条上次已成功，会跳过")
 
     async def flow():
+        from .canary import CanaryBook
+
+        book = CanaryBook(store.root)
+        state = book.load(skill.skill_id) if args.canary else None
+        candidate = None
+        if state is not None:
+            candidate = load_skill(book.candidate_path(skill.skill_id))
+            print(
+                f"灰度路由：{skill.version}（稳定）← {int(state.weight * 100)}% → "
+                f"{candidate.version}（候选），按 item_id 粘性分桶"
+            )
+
+        def resolver(item):
+            return candidate if state.routes(item.item_id) else skill
+
         async with async_playwright() as p:
             browser = await p.chromium.launch(channel=args.channel, headless=True)
             try:
@@ -374,7 +536,7 @@ def cmd_batch(args: argparse.Namespace) -> int:
                 async def teardown(adapter):
                     await adapter.page.close()
 
-                return await run_batch(
+                report = await run_batch(
                     skill,
                     items,
                     factory,
@@ -383,9 +545,21 @@ def cmd_batch(args: argparse.Namespace) -> int:
                     interval_ms=args.interval_ms,
                     stop_after_failures=args.stop_after_failures or None,
                     teardown=teardown,
+                    resolver=resolver if state is not None else None,
                 )
             finally:
                 await browser.close()
+
+        if state is not None:
+            for result in report.results:
+                if result.status == "skipped":
+                    continue
+                state.record(result.version or skill.version, result.ok)
+            book.save(state)
+            verdict = state.verdict(skill.version)
+            print(f"\n灰度累计：{state.samples}")
+            print(f"灰度结论：{verdict['decision']} —— {verdict['reason']}")
+        return report
 
     try:
         report = asyncio.run(flow())
@@ -406,6 +580,8 @@ def cmd_batch(args: argparse.Namespace) -> int:
         f"\n批完成：共 {report.total} 条，成功 {report.passed}，"
         f"失败 {report.failed}，跳过 {report.skipped}，通过率 {report.rate:.2%}"
     )
+    if args.canary:
+        print(f"按版本：{report.by_version()}")
     if report.failed:
         print(f"失败分布（该修代码还是该修数据）：{report.by_layer()}")
         for result in report.failures()[:10]:
@@ -668,6 +844,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--precheck", default="", help="③ 写操作的查重正则，如 'R-\\d{6,}'")
     p.add_argument("--interactive", "-i", action="store_true",
                    help="逐条交互确认（推荐：闸越关键越别靠背参数）")
+    p.add_argument("--serve", action="store_true",
+                   help="起本地网页做人审（纯标准库，只绑 127.0.0.1）")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-browser", action="store_true", help="--serve 时不自动开浏览器")
+    p.add_argument("--export-html", default="",
+                   help="把表单导出成 HTML（只读，不能提交）")
     p.add_argument("--out", default="")
     p.set_defaults(func=cmd_review)
 
@@ -712,6 +894,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="technical 探针连续失败多少次升格告警")
     p.set_defaults(func=cmd_run_golden)
 
+    p = sub.add_parser("canary", help="灰度发布：候选版本先接一小部分真实请求")
+    p.add_argument("action", choices=["start", "status", "promote", "abort"])
+    p.add_argument("--store", required=True)
+    p.add_argument("--skill-id", required=True)
+    p.add_argument("--candidate", default="", help="start 用：候选技能 json 路径")
+    p.add_argument("--weight", type=float, default=0.1, help="候选接多少比例（0~1）")
+    p.add_argument("--min-samples", type=int, default=20, help="候选满多少条才给结论")
+    p.add_argument("--scores", default="", help="promote 用：过发布闸的 scores.json")
+    p.add_argument("--force", action="store_true", help="无视样本量/结论强行提升")
+    p.set_defaults(func=cmd_canary)
+
     p = sub.add_parser("batch", help="批量执行一批单据（失败隔离 + 断点续跑，需要真浏览器）")
     p.add_argument("--store", required=True)
     p.add_argument("--skill", required=True)
@@ -723,6 +916,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--interval-ms", type=int, default=0, help="每条之间停多少毫秒")
     p.add_argument("--stop-after-failures", type=int, default=0, help="失败到 N 条就停（0=不停）")
     p.add_argument("--resume", action="store_true", help="跳过上次已成功的条目")
+    p.add_argument("--canary", action="store_true",
+                   help="按灰度权重把条目路由到候选版本（需先 canary start）")
     p.add_argument("--channel", default="chrome")
     p.set_defaults(func=cmd_batch)
 

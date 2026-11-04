@@ -54,6 +54,7 @@ class BatchResult:
     duration_ms: int = 0
     failure_layer: str = ""
     step_id: int | None = None
+    version: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +65,7 @@ class BatchResult:
             "duration_ms": self.duration_ms,
             "failure_layer": self.failure_layer,
             "step_id": self.step_id,
+            "version": self.version,
         }
 
 
@@ -106,6 +108,16 @@ class BatchReport:
             layers[r.failure_layer or "unknown"] = layers.get(r.failure_layer or "unknown", 0) + 1
         return layers
 
+    def by_version(self) -> dict[str, dict[str, int]]:
+        """按版本统计（灰度用）：跳过的不算，否则候选的样本永远不够。"""
+        slots: dict[str, dict[str, int]] = {}
+        for r in self.results:
+            if r.status == STATUS_SKIPPED:
+                continue
+            slot = slots.setdefault(r.version or "-", {"ok": 0, "fail": 0})
+            slot["ok" if r.ok else "fail"] += 1
+        return slots
+
     def checkpoint(self) -> dict[str, str]:
         """续跑用：只记成功的，失败的下次还要重试。"""
         return {r.item_id: r.status for r in self.results if r.status == STATUS_OK}
@@ -133,8 +145,13 @@ async def run_batch(
     interval_ms: int = 0,
     stop_after_failures: int | None = None,
     teardown: PageTeardown | None = None,
+    resolver: Callable[[Any], "Skill | Awaitable[Skill]"] | None = None,
 ) -> BatchReport:
-    """批量执行。任何一条失败都不会中断整批（除非显式设了 stop_after_failures）。"""
+    """批量执行。任何一条失败都不会中断整批（除非显式设了 stop_after_failures）。
+
+    `resolver(item) -> Skill` 用于灰度：每条按自己的 key 决定走哪个版本。
+    不传就是全程用同一个 skill。
+    """
     report = BatchReport()
     done = dict(checkpoint or {})
     attempted = 0
@@ -151,11 +168,16 @@ async def run_batch(
         attempted += 1
         started = time.perf_counter()
         page: Any = None
+        target = skill
         try:
+            if resolver is not None:
+                target = resolver(item)
+                if inspect.isawaitable(target):
+                    target = await target
             page = page_factory(item)
             if inspect.isawaitable(page):
                 page = await page
-            run = await execute(skill, item.params, page, run_id=f"batch::{item.item_id}")
+            run = await execute(target, item.params, page, run_id=f"batch::{item.item_id}")
         except Exception as exc:  # noqa: BLE001 - 单条炸了不能拖垮整批
             report.results.append(
                 BatchResult(
@@ -165,6 +187,7 @@ async def run_batch(
                     detail=f"{type(exc).__name__}: {str(exc)[:200]}",
                     duration_ms=int((time.perf_counter() - started) * 1000),
                     failure_layer="executor",
+                    version=getattr(target, "version", ""),
                 )
             )
         else:
@@ -178,6 +201,7 @@ async def run_batch(
                     duration_ms=int((time.perf_counter() - started) * 1000),
                     failure_layer="" if run.ok else (failed.failure_layer or failed.status),
                     step_id=None if failed is None else failed.step_id,
+                    version=getattr(target, "version", ""),
                 )
             )
         finally:
