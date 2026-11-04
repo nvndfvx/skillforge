@@ -1,4 +1,4 @@
-"""数据模型：Assertion / Step / Skill / GoldenCase / 单调性闸。
+﻿"""数据模型：Assertion / Step / Skill / GoldenCase / 单调性闸。
 
 设计约束（来自 v3 定稿）：
   - 断言分级（business / technical）            —— 地基①
@@ -113,6 +113,7 @@ class Step:
     # 写成独立字段而不是塞进 meta，是为了让 Healer 的分流逻辑能直接读。
     technical_assertion: Assertion | None = None
     fingerprint: ElementFingerprint | None = None
+    precheck_command: str = ""  # CLI 域专用：写操作前先跑这条命令查重（对比浏览器域的 precheck 断言）
     fragile: bool = False  # 两次演示 target 不同 → 编译期就知道会漂
     note: str = ""
 
@@ -123,6 +124,20 @@ class Step:
     def errors(self) -> list[str]:
         """地基④ 的硬约束在这里变成可执行检查。"""
         out: list[str] = []
+        if self.action is ActionKind.RUN:
+            # CLI 域：命令模板必须有，写操作必须能查重
+            if not str(self.value or "").strip():
+                out.append(f"[step {self.step_id}] run 动作没有命令（value 为空）。")
+            if self.is_write and not str(self.precheck_command or "").strip():
+                out.append(
+                    f"[step {self.step_id}] CLI 域的写操作缺 precheck_command："
+                    "查不了重就不许写。"
+                )
+            if self.assertion is None:
+                out.append(f"[step {self.step_id}] 无断言：命令跑成功了系统也不知道对不对。")
+            elif self.assertion.confirmed_by != "human":
+                out.append(f"[step {self.step_id}] 断言未人确认。")
+            return out
         if self.is_write:
             if not self.idempotency_key:
                 out.append(
@@ -176,6 +191,7 @@ class Step:
                 self.technical_assertion.to_dict() if self.technical_assertion else None
             ),
             "fingerprint": self.fingerprint.to_dict() if self.fingerprint else None,
+            "precheck_command": self.precheck_command,
             "fragile": self.fragile,
             "note": self.note,
         }
@@ -228,6 +244,9 @@ class Skill:
     preconditions: list[Precondition] = field(default_factory=list)
     steps: list[Step] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
+    # 执行域：browser（DOM 操作） / cli（跑命令）。
+    # 桌面 GUI 刻意不支持 —— 控件树比 DOM 脆一个数量级，见 README「域」一节。
+    domain: str = "browser"
     # 生命周期：draft（刚编译出来，允许断言未确认）
     #          → reviewed（人审过步骤与断言）
     #          → published（已过单调性闸）
@@ -237,6 +256,8 @@ class Skill:
     # -- 校验 ---------------------------------------------------------------
     def errors(self) -> list[str]:
         out: list[str] = []
+        if self.domain not in ("browser", "cli"):
+            out.append(f"未知执行域 {self.domain!r}：只支持 browser / cli")
         if not self.steps:
             out.append("技能没有任何步骤。")
         seen: set[int] = set()
@@ -245,6 +266,15 @@ class Skill:
                 out.append(f"step_id 重复：{s.step_id}")
             seen.add(s.step_id)
             out.extend(s.errors())
+            # 域与动作要自洽：CLI 域不该出现 fill/click，浏览器域不该出现 run
+            if self.domain == "cli" and s.action is not ActionKind.RUN:
+                out.append(
+                    f"[step {s.step_id}] domain=cli 只能用 run 动作，不支持 {s.action.value}"
+                )
+            if self.domain == "browser" and s.action is ActionKind.RUN:
+                out.append(
+                    f"[step {s.step_id}] run 动作只在 domain=cli 下有效"
+                )
         for p in self.parameters:
             if not p.name:
                 out.append("存在无名参数。")
@@ -332,6 +362,7 @@ class Skill:
             "preconditions": [p.to_dict() for p in self.preconditions],
             "steps": [s.to_dict() for s in self.steps],
             "meta": dict(self.meta),
+            "domain": self.domain,
             "state": self.state,
         }
 

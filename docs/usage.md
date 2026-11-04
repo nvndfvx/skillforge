@@ -1,4 +1,4 @@
-# 安装与上手
+﻿# 安装与上手
 
 从零装好、跑通第一个技能，约 15 分钟。
 
@@ -453,6 +453,55 @@ skillforge flow run --flow flow.json --store ./store --out flow-report.json
   未执行：[]
   注意：浏览器里的写操作**没有回滚**，已经做成的那几步请人工确认后再决定怎么办
 ```
+
+### 4.14 CLI 域：把技能跑在命令行上
+
+不是所有活都在浏览器里。CLI 域把整条链路（断言 / 幂等门 / 基准集 / 单调性闸 / 自动补丁）
+搬到命令上，技能结构完全一样，只换 domain 和动作。
+
+**技能示例**（examples/cli-skill.example.json）：
+
+``json
+{
+  "skill_id": "healthcheck",
+  "domain": "cli",
+  "parameters": [{ "name": "目标", "type": "string", "required": true }],
+  "steps": [{
+    "step_id": 1,
+    "action": "run",
+    "value": "python -c \"import urllib.request; print(urllib.request.urlopen('{{目标}}', timeout=10).status)\"",
+    "assertion": {
+      "assertion_id": "a-status", "kind": "business", "anchor": "business_entity",
+      "operator": "contains", "expected": "200", "confirmed_by": "human"
+    }
+  }],
+  "state": "reviewed"
+}
+``
+
+**跑**：
+
+``bash
+skillforge run --skill cli-skill.json --params '{"目标":"https://example.com"}'
+``
+
+skillforge run 会按 domain 自动分派：browser 走 playwright，cli 走子进程。
+
+**失败分层和浏览器域一致**：
+
+| 现象 | 层 | 说明 |
+|---|---|---|
+| 命令返回非 0 | step | 命令自己失败了 |
+| 退出码 0 但输出不合断言 | ssertion | 命令跑完了，但业务上不对 |
+| 命令模板缺参数 | param | 该修清单，不该修代码 |
+| 写操作没 precheck_command | precheck | **blocked，不执行** |
+| 超时 | step | 默认 60 秒，--timeout 可调 |
+
+**幂等门在 CLI 域的写法**：写步骤必须给 precheck_command（返回 0 表示"已存在 → 跳过"）。
+没有它就直接 blocked —— 和浏览器域"没有 precheck 就不许写"是同一条底线。
+
+**桌面 GUI 为什么不支持**：见 README「两个执行域」一节。简单说，
+控件树比 DOM 脆一个数量级，而桌面能拿到的业务证据太弱，撑不起"稳定地把事做对"这个底线。
 
 ---
 

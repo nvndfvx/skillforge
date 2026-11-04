@@ -372,6 +372,72 @@ def cmd_signals(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """按 skill.domain 分派：browser 走 playwright，cli 走子进程。"""
+    skill = load_skill(args.skill)
+    try:
+        params = json.loads(args.params) if args.params else {}
+    except json.JSONDecodeError as exc:
+        print(f"--params 不是合法 JSON：{exc}")
+        return 1
+
+    blockers = skill.publish_blockers()
+    errors = skill.errors()
+
+    if skill.domain == "cli":
+        from .cli_domain import preview, run_cli_skill
+
+        if errors:
+            _print_list("技能结构问题", errors)
+            return 1
+        print(f"CLI 域：{skill.skill_id} v{skill.version}")
+        for line in preview(skill):
+            print(line)
+        print()
+        result = asyncio.run(
+            run_cli_skill(skill, params, cwd=args.cwd or None, timeout_s=args.timeout)
+        )
+        for step in result.steps:
+            mark = {"ok": "v", "failed": "x", "skipped": "-", "blocked": "!"}.get(step.status, "?")
+            print(f"  {mark} step{step.step_id} {step.status:8s} {step.detail[:100]}")
+        print(f"\n结果：{'成功' if result.ok else '失败'}")
+        return 0 if result.ok else 1
+
+    # browser 域
+    if errors:
+        _print_list("技能结构问题", errors)
+        return 1
+    if blockers:
+        _print_list("发布阻断（browser 域需要人审完才能跑）", blockers)
+        return 1
+    try:
+        from .executor.playwright_page import launch_page
+    except Exception as exc:  # noqa: BLE001
+        print(f"需要 playwright：{type(exc).__name__}（pip install \"skillforge-engine[browser]\"）")
+        return 1
+
+    from .executor.driver import execute
+
+    params.setdefault("start_url", args.start_url) if args.start_url else None
+    if args.start_url:
+        _override_start_url(skill, args.start_url)
+    async def flow():
+        async with launch_page(channel=args.channel) as page:
+            return await execute(skill, params, page, run_id=args.run_id or "run")
+
+    try:
+        result = asyncio.run(flow())
+    except Exception as exc:  # noqa: BLE001
+        print(f"执行失败：{type(exc).__name__}: {str(exc)[:200]}")
+        return 1
+
+    for step in result.steps:
+        mark = {"ok": "v", "failed": "x", "skipped": "-", "blocked": "!"}.get(step.status, "?")
+        print(f"  {mark} step{step.step_id} {step.status:8s} {(step.detail or '')[:100]}")
+    print(f"\n结果：{'成功' if result.ok else '失败'}")
+    return 0 if result.ok else 1
+
+
 def cmd_flow(args: argparse.Namespace) -> int:
     """多技能编排：先查 → 再下单 → 再通知。"""
     from .flow import Flow
@@ -1016,6 +1082,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--threshold", type=int, default=5,
                    help="technical 探针连续失败多少次升格告警")
     p.set_defaults(func=cmd_run_golden)
+
+    p = sub.add_parser("run", help="跑一次技能（按 skill.domain 自动分派 browser / cli）")
+    p.add_argument("--skill", required=True)
+    p.add_argument("--params", default="", help="入参 JSON")
+    p.add_argument("--start-url", default="", help="browser 域：覆盖起始页")
+    p.add_argument("--channel", default="chrome")
+    p.add_argument("--run-id", default="")
+    p.add_argument("--cwd", default="", help="cli 域：命令的工作目录")
+    p.add_argument("--timeout", type=int, default=60, help="cli 域：单条命令超时秒数")
+    p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("flow", help="多技能编排：上一步的产出当下一步的入参")
     p.add_argument("action", choices=["run", "validate"])

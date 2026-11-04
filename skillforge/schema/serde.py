@@ -1,4 +1,4 @@
-"""JSON 反序列化：把 to_dict() 的产物读回数据类。
+﻿"""JSON 反序列化：把 to_dict() 的产物读回数据类。
 
 持久化（版本库、Golden Set、Trace 文件）都需要它。
 刻意写成独立模块，避免 models.py 里一堆 from_dict 干扰阅读。
@@ -112,6 +112,7 @@ def step_from_dict(data: Any) -> Step:
         assertion=assertion_from_dict(_get(data, "assertion")),
         technical_assertion=assertion_from_dict(_get(data, "technical_assertion")),
         fingerprint=fingerprint_from_dict(_get(data, "fingerprint")),
+        precheck_command=str(_get(data, "precheck_command") or ""),
         fragile=bool(_get(data, "fragile", False)),
         note=str(_get(data, "note") or ""),
     )
@@ -129,6 +130,7 @@ def skill_from_dict(data: Any) -> Skill:
         ],
         steps=[step_from_dict(x) for x in (_get(data, "steps") or [])],
         meta=dict(_get(data, "meta") or {}),
+        domain=str(_get(data, "domain") or "browser"),
         state=str(_get(data, "state") or "draft"),
     )
 

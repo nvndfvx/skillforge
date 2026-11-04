@@ -62,11 +62,40 @@
 > 这是"每天真的干活"和"跑测试"的本质区别：跑测试要的是"哪条挂了"，
 > 干活要的是"剩下的先做完，挂的那几张下班再补"。
 
+## 两个执行域：浏览器 / CLI
+
+同一套技能结构、同一套断言、同一套回归闸，跑在两种地方：
+
+| | `domain: "browser"` | `domain: "cli"` |
+|---|---|---|
+| 动作 | `goto` / `fill` / `click` … | 只有 `run`（一条命令模板） |
+| 读到的文本 | 页面 DOM | 进程 `stdout + stderr` |
+| 写操作查重 | `precheck` 断言（找元素） | `precheck_command`（跑命令，返回 0 表示已存在） |
+| 录制 | `skillforge record` | 手写（命令没有「录两遍」这回事） |
+| 跑法 | `skillforge run`（自动分派） | 同一条 `skillforge run` |
+
+```bash
+# 示例在 examples/cli-skill.example.json
+skillforge run --skill cli-skill.json --params '{"目标":"https://example.com"}'
+```
+
+CLI 域沿用**同一条幂等门**：写步骤没有 `precheck_command` 就 `blocked`、拒绝执行。
+所以「越用越准」那一整套（基准集 / 单调性闸 / 自动补丁）在 CLI 域同样成立。
+
+**为什么不做桌面 GUI** —— 这是个决定，不是没做完：
+
+- 控件树比 DOM 脆一个数量级：换个版本、换个 DPI、换个输入法就可能定位不到
+- 桌面自动化能拿到的**业务证据很弱**：截图像素、窗口标题，都不像单号那样能当判据
+- 这个项目的地基是「稳定地把事做对」，桌面域做不到；硬做只会多一个会骗人的域
+
+真要桌面自动化，正确做法是先找那软件的 API 或命令行（多数企业软件都有），
+包成 CLI 域 —— 而不是在上面套一层截图点击。
+
 ## 它不做什么
 
 别把它当万能药，这几条是真的边界：
 
-- ❌ **不做通用 GUI 机器人**：只支持浏览器域（要桌面/CLI 自动化得另找）
+- ❌ **不做桌面 GUI 机器人**：只支持浏览器域和 CLI 域（理由见上一节）
 - ❌ **不替你判断业务规则变了**：规则变了，它会把这个错的流程**做得又快又稳**（见[设计文档 §6](docs/design-v3.md)）
 - ❌ **不适合低频流程**：月频的活半年攒不够失败样本，"越用越准"学不动
 - ❌ **不适合 ≥1000 次/天**：那时候该直接反解 API，而不是开浏览器点
@@ -81,7 +110,7 @@
 ```bash
 git clone https://github.com/nvndfvx/skillforge.git
 cd skillforge
-python tests/run_all.py          # 151 个测试全过，零第三方依赖
+python tests/run_all.py          # 165 个测试（14 个 CLI 域测试需要允许创建子进程）
 python examples/demo_loop.py     # 端到端闭环演示（不用浏览器）
 ```
 
@@ -95,7 +124,7 @@ pip install git+https://github.com/nvndfvx/skillforge.git
 skillforge --help
 ```
 
-装完就有一个 `skillforge` 命令，13 个子命令见下面「命令行」。
+装完就有一个 `skillforge` 命令，14 个子命令见下面「命令行」。
 
 ### 方式三：要真的控制浏览器（录制 / 真跑 / 自动修）
 
@@ -125,13 +154,13 @@ pip install skillforge_engine-0.6.1-py3-none-any.whl
 pip install "https://github.com/nvndfvx/skillforge/releases/latest/download/skillforge_engine-0.6.1-py3-none-any.whl"
 ```
 
-> 这个 wheel 是 CI 里**真装进干净 venv、再用装进去的包跑完整套 151 个测试**之后才发布的。
+> 这个 wheel 是 CI 里**真装进干净 venv、再用装进去的包跑完整套 165 个测试**之后才发布的。
 
 ### 验证装好了
 
 ```bash
 skillforge --help                              # 命令能出来
-python tests/run_all.py                        # 151 个测试全过
+python tests/run_all.py                        # 165 个测试
 python tests/test_real_browser.py              # 真浏览器 27 项（没装 playwright 会 SKIP）
 ```
 
@@ -181,7 +210,7 @@ skillforge release --store ./store --skill skill.json --scores scores.json
 
 | | |
 |---|---|
-| 离线测试 | **151 个**，零第三方依赖（`python tests/run_all.py`） |
+| 离线测试 | **165 个**，零第三方依赖（14 个 CLI 域测试要允许创建子进程，沙箱里会自动 SKIP） |
 | 真浏览器检查 | **27 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
 | CI | ubuntu + windows × Python 3.10/3.12，全绿 |
 | 打包 | wheel + sdist；CI 会装进干净 venv，**用装进去的包**再跑一遍全套测试 |
@@ -193,7 +222,7 @@ skillforge release --store ./store --skill skill.json --scores scores.json
 
 ## 命令行
 
-13 个子命令，覆盖闭环每一步。完整教程见 [docs/usage.md](docs/usage.md)。
+14 个子命令，覆盖闭环每一步。完整教程见 [docs/usage.md](docs/usage.md)。
 
 ```bash
 # 1. 录演示：打开浏览器，你操作一遍，录成 Trace.json（要 playwright）

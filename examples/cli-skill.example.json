@@ -1,0 +1,37 @@
+{
+  "skill_id": "healthcheck",
+  "name": "服务健康检查（CLI 域）",
+  "description": "跑一条命令拿到 HTTP 状态码，断言它是 200。演示 CLI 域：断言打在命令输出上。",
+  "domain": "cli",
+  "version": "1.0.0",
+  "parameters": [
+    {
+      "name": "目标",
+      "type": "string",
+      "required": true,
+      "source": "manual",
+      "example": "https://example.com"
+    }
+  ],
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "run",
+      "target": {},
+      "value": "python -c \"import urllib.request; print(urllib.request.urlopen('{{目标}}', timeout=10).status)\"",
+      "assertion": {
+        "assertion_id": "a-status",
+        "kind": "business",
+        "anchor": "business_entity",
+        "operator": "contains",
+        "expected": "200",
+        "confirmed_by": "human"
+      },
+      "note": "命令异常退出会记成 step 层失败；退出码 0 但输出不对会记成 assertion 层失败"
+    }
+  ],
+  "meta": {
+    "steps_reviewed": true
+  },
+  "state": "reviewed"
+}

@@ -1,4 +1,4 @@
-"""基础类型：枚举 / 定位器 / 元素指纹 / 动作元组 / 原始轨迹。
+﻿"""基础类型：枚举 / 定位器 / 元素指纹 / 动作元组 / 原始轨迹。
 
 纯 stdlib，无第三方依赖。
 """
@@ -35,6 +35,7 @@ class ActionKind(str, Enum):
     SUBMIT = "submit"
     WAIT = "wait"
     READ_ENTITY = "read_entity"
+    RUN = "run"  # CLI 域：跑一条命令
 
 
 class WriteEffect(str, Enum):
