@@ -33,10 +33,11 @@ class RepairOperator:
 
 OPERATORS: tuple[RepairOperator, ...] = (
     RepairOperator("swap_locator", "env", 1, True, "用元素指纹重匹配出新定位器，再用 business 断言验证"),
-    RepairOperator("dismiss_dialog", "env", 1, True, "关闭未预期弹窗后重试当前步"),
+    # 关弹窗必须知道「点哪个按钮」，而弹窗是录制时没见过的 —— 只能人指定。
+    RepairOperator("dismiss_dialog", "env", 1, False, "关闭未预期弹窗后重试当前步（需人指定按钮）"),
     RepairOperator("add_wait", "env", 2, True, "给当前步加等待（业务级轮询，分钟级）"),
     RepairOperator("coerce_param", "param", 2, False, "修正参数类型/范围（需人确认，不能自动改业务语义）"),
-    RepairOperator("drop_optional_step", "step", 3, False, "删除可选步骤后重跑（必须 business 断言仍通过）"),
+    RepairOperator("drop_optional_step", "step", 3, True, "删除可选步骤后重跑（写操作与带业务断言的步不许删）"),
     RepairOperator("author_precheck", "precheck", 0, False, "人工补写「记录是否已存在」的查重查询"),
 )
 

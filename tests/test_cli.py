@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _helpers import temp_dir  # noqa: E402
 
 from skillforge.cli import main  # noqa: E402
+from skillforge.registry import load_skill, save_skill  # noqa: E402
 from skillforge.schema.types import RawAction, RawTrace  # noqa: E402
 
 BASE = "http://erp.local/expense/new"
@@ -175,6 +176,61 @@ def test_release_refuses_unreviewed_skill():
         )
         assert code == 1, out
         assert "人审" in out
+
+
+def _params_skill():
+    from skillforge.schema.models import Parameter, Skill, Step
+    from skillforge.schema.types import ActionKind, Locator
+
+    return Skill(
+        skill_id="expense",
+        name="报销单录入",
+        parameters=[
+            Parameter(name="客户名称", type="string", example="张三"),
+            Parameter(name="金额", type="int", example=500),
+        ],
+        steps=[
+            Step(step_id=1, action=ActionKind.FILL,
+                 target=Locator(role="textbox", name="客户名称"), value="{{客户名称}}")
+        ],
+    )
+
+
+def test_compiled_skill_starts_as_draft():
+    with temp_dir() as tmp:
+        a, b = _setup_traces(tmp)
+        skill_path = tmp / "skill.json"
+        run_cli(
+            "compile", "--trace-a", str(a), "--trace-b", str(b),
+            "--out", str(skill_path), "--skill-id", "expense",
+        )
+        assert load_skill(skill_path).state == "draft"
+
+
+def test_golden_suggest_then_apply():
+    with temp_dir() as tmp:
+        skill_path = tmp / "skill.json"
+        save_skill(_params_skill(), skill_path)
+        store = tmp / "store"
+
+        code, out = run_cli(
+            "golden", "suggest", "--store", str(store), "--skill-id", "expense",
+            "--skill", str(skill_path), "--limit", "6",
+        )
+        assert code == 0, out
+        assert "必须人确认" in out
+        assert "没有写库" in out
+
+        code, out = run_cli(
+            "golden", "suggest", "--store", str(store), "--skill-id", "expense",
+            "--skill", str(skill_path), "--limit", "6", "--apply",
+        )
+        assert code == 0, out
+        assert "已写入" in out
+
+        code, out = run_cli("golden", "list", "--store", str(store), "--skill-id", "expense")
+        assert code == 0, out
+        assert "origin=manual_edge" in out
 
 
 def main_() -> int:

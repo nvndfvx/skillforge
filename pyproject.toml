@@ -1,10 +1,10 @@
-[build-system]
+﻿[build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "skillforge"
-version = "0.4.0"
+version = "0.5.0"
 description = "观察人类操作 → 蒸馏参数化技能 → 沙箱执行 → 异常自愈（纵向调优）"
 readme = "README.md"
 requires-python = ">=3.10"

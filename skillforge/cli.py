@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .compiler.distiller import distill
+from .golden.suggest import suggest_cases
 from .observer.aligner import align_actions
 from .registry import GateRejected, SkillStore, load_skill, save_skill
 from .schema.models import Assertion, CaseScore, GoldenCase
@@ -138,6 +139,28 @@ def cmd_golden(args: argparse.Namespace) -> int:
         print(f"Golden Set：{len(cases)} 条")
         for case in cases:
             print(f"  {case.case_id:12s} origin={case.origin:13s} params={case.params}")
+        return 0
+
+    if args.action == "suggest":
+        if not args.skill:
+            print("suggest 需要 --skill（要从参数定义生成用例）")
+            return 1
+        skill = load_skill(args.skill)
+        cases = suggest_cases(skill, limit=args.limit)
+        print(f"生成 {len(cases)} 条候选 —— origin=manual_edge，**必须人确认才能当真值**")
+        for case in cases:
+            print(f"  {case.case_id:24s} {case.params}")
+        if not args.apply:
+            print("\n（只是候选，没有写库。确认后加 --apply 落盘）")
+            return 0
+        added = 0
+        for case in cases:
+            try:
+                store.add_case(args.skill_id, case)
+                added += 1
+            except ValueError as exc:
+                print(f"  跳过 {case.case_id}：{exc}")
+        print(f"\n已写入 {added} 条，当前共 {len(store.cases(args.skill_id))} 条")
         return 0
 
     params = json.loads(args.params or "{}")
@@ -272,9 +295,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_review)
 
     p = sub.add_parser("golden", help="管理 Golden Set（只增不删）")
-    p.add_argument("action", choices=("add", "list"))
+    p.add_argument("action", choices=("add", "list", "suggest"))
     p.add_argument("--store", required=True)
     p.add_argument("--skill-id", required=True)
+    p.add_argument("--skill", default="", help="suggest 用：从哪个 Skill 的参数生成用例")
+    p.add_argument("--limit", type=int, default=12)
+    p.add_argument("--apply", action="store_true", help="suggest 用：确认后落盘")
     p.add_argument("--case-id", default="")
     p.add_argument("--params", default="{}")
     p.add_argument("--origin", default="demo", choices=("demo", "healed_failure", "manual_edge"))

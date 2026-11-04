@@ -14,16 +14,17 @@
 
 | | |
 |---|---|
-| 离线测试 | **76 个**，零第三方依赖（`python tests/run_all.py`） |
+| 离线测试 | **90 个**，零第三方依赖（`python tests/run_all.py`） |
 | 真浏览器检查 | **22 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
-| 闭环 | 录制 → 对齐 → 编译 → 人审三道勾 → Golden 跑批 → 过闸发布 → 回滚 |
-| 还缺 | Healer 自动打补丁、批次/灰度、人审 UI |
+| 闭环 | 录制 → 对齐 → 编译 → 人审三道勾 → Golden 跑批 → 过闸发布 → **自动打补丁** → 回滚 |
+| 还缺 | 批次/灰度、人审 UI |
 
 ## 快速开始（离线，不需要浏览器）
 
 ```bash
-python tests/run_all.py          # 76 个离线测试
+python tests/run_all.py          # 90 个离线测试
 python examples/demo_loop.py     # 端到端闭环演示（FakePage）
+python examples/demo_heal.py     # 自动打补丁 + Golden Set 扩到 10 条
 ```
 
 ## 命令行
@@ -40,6 +41,10 @@ python -m skillforge review --skill skill.json \
 # 3. 建回归基准集（只增不删）
 python -m skillforge golden add --store ./store --skill-id expense \
     --case-id c1 --params '{"客户名称":"张三","金额":"500"}'
+
+# 3b. 用例太少？从参数定义生成候选（必须人确认，不是"自动获得真值"）
+python -m skillforge golden suggest --store ./store --skill-id expense \
+    --skill skill.json --limit 12          # 确认后加 --apply 才落盘
 
 # 4. 真浏览器跑批 → scores.json
 python -m skillforge run-golden --store ./store --skill skill.json \
@@ -81,7 +86,7 @@ flowchart TB
 
   subgraph S4["④ 异常自愈 healer"]
     DRV -->|"RunResult 失败分层"| TRI["triage 三层定位"]
-    TRI -->|"候选算子"| DRV
+    TRI -->|"heal：候选算子逐个过闸"| DRV
   end
 
   subgraph S5["⑤ 版本闸 golden + registry"]
@@ -174,17 +179,24 @@ skillforge/
 │   ├── adapter.py     PageAdapter 协议（executor 不依赖 playwright）
 │   ├── validator.py   断言求值（business 判死 / technical 只当信号）
 │   ├── idempotency.py 幂等门（写操作没 precheck → 拒绝执行）
+│   ├── candidates.py  从失败页面按指纹收集新定位器候选
 │   ├── driver.py      执行 + 前置条件 + 指纹兜底 + 写操作唯一性 + 失败分层
 │   └── playwright_page.py  真实浏览器适配器（只有这层依赖 playwright）
 ├── healer/
-│   └── triage.py      三层定位 + 封闭算子集
+│   ├── triage.py      三层定位 + 封闭算子集
+│   └── patcher.py     自动打补丁：改一版 → 跑闸 → 被拒 / 被收
 ├── golden/
-│   └── runner.py      Golden 跑批 + 单调性闸接线
+│   ├── runner.py      Golden 跑批 + 单调性闸接线
+│   └── suggest.py     从参数生成候选用例（origin=manual_edge，需人确认）
 ├── registry.py        版本库：发布闸（GateRejected）、回滚、Golden Set 只增不删
 ├── cli.py             命令行（compile / review / golden / release / rollback / status / run-golden）
 ├── testing.py         FakePage（tests 与 examples 共用）
 ├── scripts/
 │   └── bootstrap_playwright.py  把 playwright 装进 vendor/（绕开 pip 临时目录问题）
+├── examples/
+│   ├── demo_compile.py  两遍演示 → Skill 草稿
+│   ├── demo_loop.py     完整闭环（编译 → 人审 → Golden → 改版 → 修复 → 过闸）
+│   └── demo_heal.py     自动打补丁 + Golden Set 扩到 10 条
 ├── docs/
 │   └── design-v3.md   设计定稿（7 条硬约束、两个天花板、MVP 验收 14 条）
 └── tests/
@@ -473,18 +485,78 @@ technical 断言本来没有 target，`from_dict` 把它变成了 `Locator()`，
 
 ---
 
+## 第六轮（M5）：自动打补丁 + Golden Set 扩到 10 条
+
+两件事一起做，因为它们是同一个问题的两面：**光有闸没人改，闸就没用；有人改但用例太少，闸就是瞎的。**
+
+### 6.1 Healer 自动打补丁
+
+`healer/patcher.py` 把「改一版 → 跑闸 → 被拒/被收」接成了自动路径。三条硬规则：
+
+1. **只在封闭算子集里搜**（`triage.OPERATORS`），且只应用 `auto_applicable=True` 的
+2. **一次只改一个算子**，改完立刻跑 Golden Set 过闸
+3. **没过闸 = 什么都没发生**，换下一个算子继续试
+
+`swap_locator` 需要的新定位器**不能凭空造** —— 必须由调用方从失败页面收集
+（`executor/candidates.py` 按指纹相似度排序）。指纹都认不出时，说明变化太大，该走人工。
+
+`examples/demo_heal.py` 的实测输出：
+
+```
+=== 4. heal 第一轮（拿不到新定位器候选） ===
+  [跳过] swap_locator       没有可用的新定位器候选（需要从失败页面收集）
+  [跳过] dismiss_dialog     该算子不允许自动应用
+  [试用] add_wait           通过率 0.00（10 条） → 闸拒：单点翻转…
+  结果：未修复，需人工        当前版本仍是 v1.0.0
+
+=== 5. heal 第二轮（先从改版页收集候选定位器） ===
+  收集到候选：{3: ['role=button|name=提交保存']}
+  [收下] swap_locator       通过率 1.00（10 条）
+  已自动收下并发布 v1.1.0
+```
+
+**关键在第一轮**：它试了、被拒了、库里什么都没变。这才是"自动自愈"该有的样子——
+不是"AI 改了对不对都算数"。
+
+### 6.2 Golden Set 扩到 10 条（并纠正一个我自己的说法）
+
+`golden/suggest.py` 从参数定义生成候选（单参数扰动：`张三→张三A / A张三 / 张三甲 / 张三张三`，
+`500→501/499/1000/0/510`，日期 ±1/±7 天），CLI 是 `golden suggest`。
+
+**它们全部标 `origin="manual_edge"`，必须人确认才能当真值** —— 生成用例解决的是"人懒得想"，
+不是"自动获得真值"。
+
+我上一轮说"3 条太少，因为一个 case 就是 33 个百分点，闸看不出趋势"。**这个说法不准确。**
+真正的问题不是**分辨率**，是**覆盖面**。demo 第 6 节把它演出来了：
+
+```
+=== 6. 为什么 3 条不够：一个「把正则收紧」的补丁 ===
+  3 条集：  {'total': 3,  'passed': 3, 'rate': 1.0}   闸 → 放行（错！）
+  10 条集：{'total': 10, 'passed': 9, 'rate': 0.9}   闸 → 拒绝
+    - 单点翻转（旧版通过、新版失败）：['suggest-客户名称-3']
+    - 通过率下降：1.000 → 0.900
+```
+
+`R\-\d{6,}` 被"收紧"成 `R\-\d{8}` —— 看起来更严谨，实则过严。
+3 条集里全是 8 位单号，所以这个回归**压根不会被发现**；
+10 条集里有一条 7 位单号的用例（`张三甲`），于是被抓出来。
+
+> 所以扩 Golden Set 的正确理由是：**你想要的用例得先存在，闸才能拦住它。**
+> 分辨率是顺带的。
+
+---
+
 ## 还没做的
 
-1. **Healer 自动打补丁**：现在只出候选算子（`swap_locator` 等），不自动改技能。
-   刻意如此——它必须过单调性闸才允许改，闸已经能拦，但"改"这个动作还没接上。
-2. **批次 / 灰度 / 凭证脱敏**（二期 C 类）
-3. **人审 UI**：`review_checklist()` 是数据结构 + CLI 参数，缺一个能点选打勾的界面
-4. **写操作的精确匹配**：现在靠"唯一命中"兜住子串匹配的坑；
+1. **批次 / 灰度 / 凭证脱敏**（二期 C 类）
+2. **人审 UI**：`review_checklist()` 是数据结构 + CLI 参数，缺一个能点选打勾的界面
+3. **写操作的精确匹配**：现在靠"唯一命中"兜住子串匹配的坑；
    更彻底的做法是给 `Locator` 加 `exact` 模式，读操作宽、写操作严
-5. **Golden Set 扩到 ≥10 条**（H13：3 条的闸分辨率太低，一个 case 就是 33 个百分点）
-6. **H14**：technical 断言失败没有累积告警，连续 N 次应升格成 `fragile` 事件
+4. **H14**：technical 断言失败没有累积告警，连续 N 次应升格成 `fragile` 事件
+5. **heal 接进 CLI**：现在自动打补丁是库 API（`healer.heal`），还没变成 `skillforge heal` 命令
+   —— 因为它需要一个活着的浏览器来收集候选定位器
 
-**下一步建议做 1（Healer 自动打补丁）**：闸和版本库都就位了，
-现在唯一缺的是"让 Healer 真的改一版、跑闸、被拒/被收"这条自动路径。
+**下一步建议做 5**：把 `heal` 接成 CLI 命令（复用 `run-golden` 那套浏览器启动），
+这样"失败 → 自动修 → 过闸发布"就是一条命令行，而不是一段代码。
 
 

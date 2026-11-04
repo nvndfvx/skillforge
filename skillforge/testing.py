@@ -25,6 +25,7 @@ class FakePage:
         fingerprints: Sequence[ElementFingerprint] = (),
         on_submit_text: str = DEFAULT_RECEIPT,
         on_submit_url: str = "http://erp.local/expense/success",
+        required_fields: Sequence[str] = (),
     ) -> None:
         self._url = url
         self._text = text
@@ -33,6 +34,9 @@ class FakePage:
         self._fps = list(fingerprints)
         self._on_submit_text = on_submit_text
         self._on_submit_url = on_submit_url
+        # 模拟"必填校验"：缺字段时提交会失败。
+        # 用来验证「删掉一步」这种补丁会被 Golden Set 抓出来。
+        self._required = tuple(required_fields)
         self.fields: dict[str, str] = {}
         self.calls: list[tuple] = []
 
@@ -56,7 +60,11 @@ class FakePage:
         self.calls.append(("click", name))
         if "提交" in name:
             self._url = self._on_submit_url
-            self._text = self._on_submit_text
+            missing = [f for f in self._required if not self.fields.get(f)]
+            if missing:
+                self._text = "提交失败：缺少必填 " + "、".join(missing)
+            else:
+                self._text = self._on_submit_text
 
     async def exists(self, locator: Locator) -> bool:
         if locator is None:
