@@ -302,6 +302,28 @@ def test_review_interactive_rejects_bad_steps():
         assert skill.review_checklist()["① 步骤顺序已人审"] is False
 
 
+def test_override_start_url():
+    """命令行 --start-url 必须真的覆盖技能里的起始页，否则这个参数形同虚设。"""
+    from skillforge.cli import _override_start_url
+    from skillforge.schema.models import Precondition, Skill
+
+    skill = Skill(
+        skill_id="s",
+        name="n",
+        preconditions=[Precondition(kind="on_page", locator_or_path="file:///recorded.html")],
+    )
+    _override_start_url(skill, "file:///other.html")
+    assert skill.preconditions[0].locator_or_path == "file:///other.html"
+
+    # 空值不覆盖
+    _override_start_url(skill, "")
+    assert skill.preconditions[0].locator_or_path == "file:///other.html"
+    # 非 on_page 的前置条件不动
+    skill.preconditions.append(Precondition(kind="logged_in", locator_or_path="x"))
+    _override_start_url(skill, "file:///third.html")
+    assert skill.preconditions[1].locator_or_path == "x"
+
+
 def main_() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failures = 0

@@ -1,4 +1,4 @@
-# SkillForge
+﻿# SkillForge
 
 [![ci](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml/badge.svg)](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml)
 
@@ -11,55 +11,193 @@
 再用一个**回归基准集 + 单调性闸**保证版本只升不降。
 
 > 设计定稿（含 7 条实现期硬约束、两个天花板）：[docs/design-v3.md](docs/design-v3.md)
+> 详细安装与上手指南（含 Windows 踩坑）：[docs/usage.md](docs/usage.md)
+
+---
+
+## 它能做什么
+
+一个具体场景：
+
+> 你每天要在公司 ERP 后台录 30 张报销单。以前手点 30 遍，页面一改版脚本就废。
+> 现在：**你亲手录 2 遍**（故意换客户名、金额）→ SkillForge 对齐出"哪些是变量、哪些是固定步骤"
+> → 人审确认"这五步对不对、成功证据是哪个单号" → 之后它自己跑，跑坏了先自愈，修不了才找人。
+
+### ① 从操作里长出技能（不写代码、不录坐标）
+
+| 能力 | 怎么做的 |
+|---|---|
+| 识别变量 | **两遍演示序列对齐**（Needleman–Wunsch），差异就是变量，不让 LLM 猜 |
+| 定位元素 | **元素指纹**（role + 可访问名 + 相邻文案 + 相对位置），id/class 改了还能重新认出来 |
+| 抓漏掉的字段 | 每个动作后扫一遍表单，把不触发 `change` 的字段（日期控件/组件库写值）补录回来 |
+| 生成成功判据 | 从"提交前后新出现的标识符"里自动发现业务单号，做断言 |
+
+### ② 执行时有安全闸
+
+- **幂等门**：写操作没有 precheck（"怎么查这单已存在"）→ **直接拒绝执行**，不赌"可能已经成功了"
+- **写操作必须唯一命中**：`提交` 不会误点到 `撤销提交`（role+name 是子串匹配，这是真踩过的坑）
+- **断言分级**：业务断言（单号存在）判生死；技术断言（URL 变了）只报信，不判技能死
+
+### ③ 坏了自己修，修完过闸才收
+
+```
+执行失败 → 三层定级（参数错 / 定位失效 / 断言不过）
+        → 封闭算子集里挑一个改 → 跑回归基准集 → 过闸才收，没过闸库里一个字都不改
+```
+
+`swap_locator` / `add_wait` / `drop_optional_step` 三个算子可自动；关弹窗、改参数、补查重必须人来。
+
+### ④ 越用越准，有据可查
+
+- **回归基准集只增不删**，每条来自演示、自愈过的失败、或人工补充
+- **单调性闸**：① 通过率不降 ② 无单点翻转。没有它，自愈就是"用一个 bug 换另一个 bug"
+- **版本可回滚**，历史不删，来回切
+- **探针告警**：技术断言连续失败 N 次 → 升格成"要人看一眼"的事件（静默退化是最危险的）
+
+## 它不做什么
+
+别把它当万能药，这几条是真的边界：
+
+- ❌ **不做通用 GUI 机器人**：只支持浏览器域（要桌面/CLI 自动化得另找）
+- ❌ **不替你判断业务规则变了**：规则变了，它会把这个错的流程**做得又快又稳**（见[设计文档 §6](docs/design-v3.md)）
+- ❌ **不适合低频流程**：月频的活半年攒不够失败样本，"越用越准"学不动
+- ❌ **不适合 ≥1000 次/天**：那时候该直接反解 API，而不是开浏览器点
+- ❌ **不承诺全自动**：人审三道勾是必需的一道闸，不是可选项
+
+## 安装
+
+**要求**：Python ≥ 3.10，零运行时依赖（真浏览器功能才需要 playwright）
+
+### 方式一：只想看看 / 跑测试（什么都不用装）
+
+```bash
+git clone https://github.com/nvndfvx/skillforge.git
+cd skillforge
+python tests/run_all.py          # 101 个测试全过，零第三方依赖
+python examples/demo_loop.py     # 端到端闭环演示（不用浏览器）
+```
+
+### 方式二：当成命令行工具用
+
+```bash
+pip install -e .                          # 从源码装（开发）
+# 或
+pip install git+https://github.com/nvndfvx/skillforge.git
+
+skillforge --help
+```
+
+装完就有一个 `skillforge` 命令，7 个子命令见下面「命令行」。
+
+### 方式三：要真的控制浏览器（录制 / 真跑 / 自动修）
+
+```bash
+pip install "skillforge[browser]"
+playwright install chromium        # 约 130MB
+```
+
+或者用仓库自带脚本 —— **装进 `vendor/`，不写系统目录，并且复用系统已装的 Chrome**：
+
+```bash
+python scripts/bootstrap_playwright.py
+```
+
+### 验证装好了
+
+```bash
+skillforge --help                              # 命令能出来
+python tests/run_all.py                        # 101 个测试全过
+python tests/test_real_browser.py              # 真浏览器 27 项（没装 playwright 会 SKIP）
+```
+
+### Windows 注意
+
+两个真踩过的坑，都写进 [docs/usage.md](docs/usage.md) 了：
+
+1. **控制台不是 UTF-8**（cp1252/cp936）→ 测试脚本已自带 UTF-8 切换，但你自己的脚本打印中文可能崩
+2. **git 不走系统代理** → `git push` 报 `Could not resolve host` 时，给仓库单独配代理：
+   ```powershell
+   git config http.proxy http://127.0.0.1:7890
+   ```
+
+## 5 分钟跑通一个例子
+
+不需要浏览器，用内置的假页面演示完整闭环：
+
+```bash
+# 1. 跑离线测试，确认环境 OK
+python tests/run_all.py
+
+# 2. 完整闭环：两遍演示 → 对齐 → 编译 → 人审 → Golden → 改版失败 → 修复 → 过闸 → 回滚
+python examples/demo_loop.py
+
+# 3. 自动打补丁 + 回归基准集扩到 10 条
+python examples/demo_heal.py
+```
+
+真实项目里的用法（把文件换成你自己的）：
+
+```bash
+# 两遍演示轨迹 → Skill 草稿
+skillforge compile --trace-a a.json --trace-b b.json --out skill.json --skill-id expense
+
+# 交互式人审（三道勾逐条确认，别背参数）
+skillforge review --skill skill.json -i
+
+# 建回归基准集（只增不删）
+skillforge golden add --store ./store --skill-id expense --case-id c1 --params '{"客户名称":"张三"}'
+
+# 真浏览器跑批 → 过闸发布
+skillforge run-golden --store ./store --skill skill.json --start-url "file:///..." --out scores.json
+skillforge release --store ./store --skill skill.json --scores scores.json
+```
 
 ## 状态
 
 | | |
 |---|---|
-| 离线测试 | **98 个**，零第三方依赖（`python tests/run_all.py`） |
+| 离线测试 | **101 个**，零第三方依赖（`python tests/run_all.py`） |
 | 真浏览器检查 | **27 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
-| 闭环 | 录制 → 对齐 → 编译 → 人审三道勾 → Golden 跑批 → 过闸发布 → **自动打补丁** → 回滚 |
-| 还缺 | 批次/灰度、人审 UI |
-
-## 快速开始（离线，不需要浏览器）
-
-```bash
-python tests/run_all.py          # 98 个离线测试
-python examples/demo_loop.py     # 端到端闭环演示（FakePage）
-python examples/demo_heal.py     # 自动打补丁 + Golden Set 扩到 10 条
-```
+| CI | ubuntu + windows × Python 3.10/3.12，全绿 |
+| 闭环 | 录制 → 对齐 → 编译 → 人审三道勾 → 基准集跑批 → 过闸发布 → 自动打补丁 → 回滚 |
+| 还缺 | 批次/灰度、人审 Web UI |
 
 ## 命令行
 
+10 个子命令，覆盖闭环每一步。完整教程见 [docs/usage.md](docs/usage.md)。
+
 ```bash
-# 1. 两遍演示轨迹 → Skill 草稿
-python -m skillforge compile --trace-a a.json --trace-b b.json \
+# 1. 录演示：打开浏览器，你操作一遍，录成 Trace.json（要 playwright）
+python -m skillforge record --url "https://your-erp/new" --out demos/a.json --skill-id expense
+#    再录一遍，**故意换参数**（客户名/金额），否则变量会被判成常量
+
+# 2. 两遍轨迹 → Skill 草稿
+python -m skillforge compile --trace-a demos/a.json --trace-b demos/b.json \
     --out skill.json --skill-id expense --name 报销单录入
 
-# 2. 人审三道勾（缺一道就发不出去）
-python -m skillforge review --skill skill.json \
-    --steps-reviewed --confirm-assertions --precheck "R-\d{6,}"
+# 3. 交互式人审：三道勾逐条确认（别背参数）
+python -m skillforge review --skill skill.json -i
 
-# 3. 建回归基准集（只增不删）
+# 4. 建回归基准集（只增不删）
 python -m skillforge golden add --store ./store --skill-id expense \
     --case-id c1 --params '{"客户名称":"张三","金额":"500"}'
 
-# 3b. 用例太少？从参数定义生成候选（必须人确认，不是"自动获得真值"）
+# 4b. 用例太少？从参数定义生成候选（必须人确认，不是"自动获得真值"）
 python -m skillforge golden suggest --store ./store --skill-id expense \
     --skill skill.json --limit 12          # 确认后加 --apply 才落盘
 
-# 4. 真浏览器跑批 → scores.json
+# 5. 真浏览器跑批 → scores.json
 python -m skillforge run-golden --store ./store --skill skill.json \
     --start-url "file:///path/to/form.html" --out scores.json
 
-# 5. 过闸发布（没过闸库里不会有任何改动）
+# 6. 过闸发布（没过闸库里不会有任何改动）
 python -m skillforge release --store ./store --skill skill.json --scores scores.json
 
-# 6. 回滚
+# 7. 回滚 / 看状态
 python -m skillforge rollback --store ./store --skill-id expense
 python -m skillforge status   --store ./store --skill-id expense
 
-# 7. 失败 → 自动打补丁 → 过闸发布（需要真浏览器）
+# 8. 失败 → 自动打补丁 → 过闸发布（需要真浏览器）
 python -m skillforge heal --store ./store --skill skill.json \
     --start-url "file:///path/to/form.html"          # 加 --dry-run 只试不落库
 
@@ -209,7 +347,9 @@ skillforge/
 │   ├── demo_loop.py     完整闭环（编译 → 人审 → Golden → 改版 → 修复 → 过闸）
 │   └── demo_heal.py     自动打补丁 + Golden Set 扩到 10 条
 ├── docs/
+│   ├── usage.md       安装 / 上手 / Windows 踩坑 / FAQ
 │   └── design-v3.md   设计定稿（7 条硬约束、两个天花板、MVP 验收 14 条）
+├── push.cmd           双击推送（Windows）
 └── tests/
     ├── fixtures/      真实浏览器用的三个页面（v1 / v2 文案改版 / v3 id 改版）
     ├── run_all.py     一次跑完所有离线测试

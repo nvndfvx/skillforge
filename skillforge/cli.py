@@ -336,6 +336,53 @@ def cmd_signals(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_record(args: argparse.Namespace) -> int:
+    """打开一个真浏览器，让人操作一遍，录成 Trace.json。
+
+    注意：`input()` 会阻塞事件循环，而页面事件是靠绑定回调送进来的 ——
+    所以必须 `asyncio.to_thread(input, ...)`，否则你在浏览器里点半天，一条都录不到。
+    """
+    from playwright.async_api import async_playwright
+
+    from .observer.recorder import TraceRecorder
+
+    async def flow() -> int:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(channel=args.channel, headless=args.headless)
+            try:
+                page = await browser.new_page()
+                await page.goto(args.url, wait_until="domcontentloaded")
+                recorder = TraceRecorder(page, settle_timeout_ms=args.settle)
+                await recorder.start()
+                print(f"\n开始录制：{args.url}")
+                print("  从现在起，在浏览器里把你的操作走一遍。")
+                print("  ⚠ 两次演示要故意换参数（客户名/金额…），否则变量会被判成常量。")
+                await asyncio.to_thread(input, "\n操作完成后，回到这个窗口按回车结束录制 > ")
+                trace = await recorder.stop()
+            finally:
+                await browser.close()
+
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            json.dumps(trace.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"\n已保存 {len(trace.actions)} 个动作 → {out}")
+        if trace.meta.get("snapshot_reconciled"):
+            print(f"  其中 {trace.meta['snapshot_reconciled']} 个字段是从表单快照补录的")
+        print(f"\n下一步：再录一遍（换参数），然后\n"
+              f"  python -m skillforge compile --trace-a {out} --trace-b <第二遍> "
+              f"--out skill.json --skill-id {args.skill_id}")
+        return 0
+
+    try:
+        return asyncio.run(flow())
+    except Exception as exc:  # noqa: BLE001
+        print(f"录制失败：{type(exc).__name__}: {str(exc)[:200]}")
+        print("若报 No module named 'playwright'，先装：pip install \"skillforge[browser]\"")
+        return 1
+
+
 def cmd_heal(args: argparse.Namespace) -> int:
     """失败 → 三层定位 → 自动打补丁 → 过闸发布（或转人工）。"""
     from .executor.playwright_page import launch_page
@@ -343,6 +390,7 @@ def cmd_heal(args: argparse.Namespace) -> int:
 
     store = SkillStore(args.store)
     skill = load_skill(args.skill)
+    _override_start_url(skill, args.start_url)
     cases = store.cases(skill.skill_id)
     if not cases:
         print("Golden Set 是空的：没有判据就不该自动改，先 golden add / golden suggest")
@@ -449,6 +497,19 @@ def cmd_heal(args: argparse.Namespace) -> int:
         return 1
 
 
+def _override_start_url(skill, start_url: str) -> None:
+    """命令行显式给了 --start-url，就覆盖技能里的起始页。
+
+    编译产物里的起始页是录制时的字面量。跑批时换环境（测试站/改版页）
+    却改不动它，等于 --start-url 形同虚设 —— 所以这里直接覆盖。
+    """
+    if not start_url:
+        return
+    for precondition in skill.preconditions:
+        if precondition.kind == "on_page":
+            precondition.locator_or_path = start_url
+
+
 def cmd_run_golden(args: argparse.Namespace) -> int:
     try:
         from .executor.playwright_page import launch_page
@@ -458,6 +519,7 @@ def cmd_run_golden(args: argparse.Namespace) -> int:
 
     store = SkillStore(args.store)
     skill = load_skill(args.skill)
+    _override_start_url(skill, args.start_url)
     cases = store.cases(skill.skill_id)
     if not cases:
         print("Golden Set 是空的，先 golden add")
@@ -569,6 +631,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--threshold", type=int, default=5,
                    help="technical 探针连续失败多少次升格告警")
     p.set_defaults(func=cmd_run_golden)
+
+    p = sub.add_parser("record", help="打开浏览器录一遍演示（需要 playwright）")
+    p.add_argument("--url", required=True, help="演示开始时的页面地址")
+    p.add_argument("--out", required=True, help="Trace.json 输出路径")
+    p.add_argument("--skill-id", default="demo")
+    p.add_argument("--settle", type=int, default=600, help="每个动作后等页面稳定的毫秒数")
+    p.add_argument("--channel", default="chrome")
+    p.add_argument("--headless", action="store_true", help="无头模式（一般人不用开）")
+    p.set_defaults(func=cmd_record)
 
     p = sub.add_parser("heal", help="失败 → 自动打补丁 → 过闸发布（需要真浏览器）")
     p.add_argument("--store", required=True)
