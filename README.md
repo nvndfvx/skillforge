@@ -1,5 +1,7 @@
 # SkillForge
 
+[![ci](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml/badge.svg)](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml)
+
 **看着人干一遍 → 蒸馏成一个技能 → 沙箱执行 → 坏了自己修 → 越用越准。**
 
 观察人类操作 → 蒸馏参数化技能 → 沙箱执行 → 异常自愈。
