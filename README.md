@@ -1,4 +1,4 @@
-# SkillForge
+﻿# SkillForge
 
 [![ci](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml/badge.svg)](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml)
 
@@ -93,7 +93,7 @@ pip install git+https://github.com/nvndfvx/skillforge.git
 skillforge --help
 ```
 
-装完就有一个 `skillforge` 命令，7 个子命令见下面「命令行」。
+装完就有一个 `skillforge` 命令，11 个子命令见下面「命令行」。
 
 ### 方式三：要真的控制浏览器（录制 / 真跑 / 自动修）
 

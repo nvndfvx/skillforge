@@ -1,4 +1,4 @@
-# 安装与上手
+﻿# 安装与上手
 
 从零装好、跑通第一个技能，约 15 分钟。
 
@@ -98,7 +98,7 @@ export PYTHONPATH="<repo>/vendor"
 
 | 命令 | 期望 |
 |---|---|
-| `skillforge --help` | 列出 10 个子命令 |
+| `skillforge --help` | 列出 11 个子命令 |
 | `python tests/run_all.py` | `全部通过（9 个文件）` |
 | `python tests/test_real_browser.py` | 有浏览器：`27/27 checks passed`；没装：`SKIP` |
 | `python -m skillforge status --store ./store --skill-id demo` | 打印一段 JSON，`releases: []` |
