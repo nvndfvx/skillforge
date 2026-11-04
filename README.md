@@ -1,4 +1,4 @@
-﻿# SkillForge
+# SkillForge
 
 [![ci](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml/badge.svg)](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/nvndfvx/skillforge?label=release)](https://github.com/nvndfvx/skillforge/releases/latest)
@@ -219,6 +219,29 @@ skillforge release --store ./store --skill skill.json --scores scores.json
 | 还缺 | 并行分支与条件跳转（编排现在只有串行） |
 
 变更历史见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 发布纪律
+
+**源码靠 `push`，发布靠 `tag`。**
+
+`git push` 之后 README / CI 徽章自动更新，但**别人下载的 wheel 不会** ——
+那个只有打 tag 才重建。v0.6.1 就踩过：代码里已经有 CLI 域，Release 里的 wheel 还没有，
+谁从下载链接装谁踩坑。
+
+判断标准：**别人装到的行为变了就发版。**
+
+```bash
+python scripts/release.py            # 要不要发版、建议升到哪个版本
+python scripts/release.py --apply    # 需要就改 __version__，并打印发版三步
+```
+
+| 改了什么 | 发不发版 |
+|---|---|
+| `README.md` / `docs/` / `examples/` / `.github/` / `tests/` / `scripts/` | 不发 |
+| `skillforge/**`（包代码）、`pyproject.toml` | **发**（提交信息带 `feat` → minor，其余 patch） |
+
+打 tag 时 `release.yml` 会先校验「tag 与 `__version__` 一致」，不一致当场失败 ——
+防止下载页写 0.7.1、包里还是 0.7.0。
 
 ## 命令行
 
