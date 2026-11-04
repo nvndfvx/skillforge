@@ -114,40 +114,19 @@ async def launch_page(
     channel: str = "chrome",
     headless: bool = True,
     profile_dir: str | None = None,
-) -> AsyncIterator[PlaywrightPage]:
-    """起一个真浏览器页面。channel 用系统已装的 Chrome/Edge，免下载 ~130MB。
+) -> AsyncIterator[Any]:
+    """起一个真浏览器页面。
 
-    `profile_dir` 给需要登录的系统用：传一个目录，浏览器就使用持久化配置，
-    登录一次之后 Cookie 留在里面，后续每次跑都还是你那个身份。
-    不传则用全新临时配置（默认，干净但每次都是"未登录"）。
+    实际返回的是 `TabbedPage`（多标签适配器），它同时兼容单页用法，
+    也暴露 `.page` / `.context` 给录制器用 —— 这样所有命令都白拿多标签能力。
+    标签页按点开的先后编号：0=初始页，1,2…=之后弹出的。
     """
-    from ..pwtmp import ensure_playwright_temp
+    from .tabbed import launch_tabbed
 
-    # 必须在 playwright 启动前做：它会在 TMP 下建 playwright-artifacts-*
-    ensure_playwright_temp()
-
-    from playwright.async_api import async_playwright
-
-    async with async_playwright() as p:
-        if profile_dir:
-            context = await p.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir),
-                channel=channel,
-                headless=headless,
-            )
-            try:
-                page = context.pages[0] if context.pages else await context.new_page()
-                yield PlaywrightPage(page)
-            finally:
-                await context.close()
-            return
-
-        browser = await p.chromium.launch(channel=channel, headless=headless)
-        try:
-            page = await browser.new_page()
-            yield PlaywrightPage(page)
-        finally:
-            await browser.close()
+    async with launch_tabbed(
+        channel=channel, headless=headless, profile_dir=profile_dir
+    ) as tabbed:
+        yield tabbed
 
 
 __all__ = ["PlaywrightPage", "launch_page"]

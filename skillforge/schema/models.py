@@ -1,4 +1,4 @@
-﻿"""数据模型：Assertion / Step / Skill / GoldenCase / 单调性闸。
+"""数据模型：Assertion / Step / Skill / GoldenCase / 单调性闸。
 
 设计约束（来自 v3 定稿）：
   - 断言分级（business / technical）            —— 地基①
@@ -104,6 +104,8 @@ class Step:
     step_id: int
     action: ActionKind
     target: Locator
+    # 这一步在哪个标签页执行：0=初始页，1,2…=之前某个 click 点开后新出现的标签页
+    tab: int = 0
     value: Any = None
     write_effect: WriteEffect = WriteEffect.NONE
     idempotency_key: str | None = None
@@ -182,6 +184,7 @@ class Step:
             "step_id": self.step_id,
             "action": self.action.value,
             "target": self.target.to_dict(),
+            "tab": self.tab,
             "value": self.value,
             "write_effect": self.write_effect.value,
             "idempotency_key": self.idempotency_key,

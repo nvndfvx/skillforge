@@ -1,4 +1,4 @@
-﻿"""JSON 反序列化：把 to_dict() 的产物读回数据类。
+"""JSON 反序列化：把 to_dict() 的产物读回数据类。
 
 持久化（版本库、Golden Set、Trace 文件）都需要它。
 刻意写成独立模块，避免 models.py 里一堆 from_dict 干扰阅读。
@@ -105,6 +105,7 @@ def step_from_dict(data: Any) -> Step:
         step_id=int(_get(data, "step_id") or 0),
         action=ActionKind(str(_get(data, "action") or "click")),
         target=locator_from_dict(_get(data, "target")),
+        tab=int(_get(data, "tab") or 0),
         value=_get(data, "value"),
         write_effect=WriteEffect(str(_get(data, "write_effect") or "none")),
         idempotency_key=_get(data, "idempotency_key"),

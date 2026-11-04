@@ -204,6 +204,7 @@ def distill(
             step_id=step_id,
             action=action_kind,
             target=_locator_of(raw),
+            tab=int(getattr(raw, "tab", 0) or 0),
             value=value,
             write_effect=write_effect,
             fingerprint=raw.fingerprint,

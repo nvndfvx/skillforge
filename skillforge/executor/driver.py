@@ -146,6 +146,27 @@ def _now() -> str:
 async def run_step(step: Step, params: Mapping[str, Any], page: PageAdapter) -> StepResult:
     result = StepResult(step_id=step.step_id, action=step.action.value)
 
+    # 多标签：这一步要在哪个标签页里做。单标签技能全是 0，等于没这段。
+    tab = int(getattr(step, "tab", 0) or 0)
+    if tab:
+        use_tab = getattr(page, "use_tab", None)
+        if use_tab is None:
+            result.status = "failed"
+            result.failure_layer = "step"
+            result.detail = (
+                f"step {step.step_id} 要求在第 {tab} 个标签页执行，"
+                "但当前页面适配器不支持多标签（请用 launch_tabbed 启动）"
+            )
+            return result
+        try:
+            await use_tab(tab)
+        except Exception as exc:  # noqa: BLE001
+            result.status = "failed"
+            result.failure_layer = "step"
+            result.detail = f"切不到第 {tab} 个标签页：{type(exc).__name__}: {exc}"
+            return result
+
+
     # 1) 幂等门：写操作没有 precheck 直接拒绝
     decision = await decide(step, page)
     if decision.decision == BLOCKED:

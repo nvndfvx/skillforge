@@ -1,4 +1,4 @@
-"""命令行入口：把闭环的每一段变成可执行命令。
+﻿"""命令行入口：把闭环的每一段变成可执行命令。
 
     python -m skillforge compile  --trace-a a.json --trace-b b.json --out skill.json
     python -m skillforge review   --skill skill.json --steps-reviewed --confirm-assertions --precheck "R-\\d{6,}"
@@ -834,7 +834,9 @@ def cmd_record(args: argparse.Namespace) -> int:
             await page.goto(args.url, wait_until="domcontentloaded")
             if profile:
                 print(f"\n使用持久化配置：{profile}（登过一次就不用再登）")
-            recorder = TraceRecorder(page, settle_timeout_ms=args.settle)
+            recorder = TraceRecorder(
+                page, settle_timeout_ms=args.settle, context=getattr(page, "context", None)
+            )
             await recorder.start()
             print(f"\n开始录制：{args.url}")
             print("  从现在起，在浏览器里把你的操作走一遍。")
@@ -842,7 +844,23 @@ def cmd_record(args: argparse.Namespace) -> int:
                 print("  ！如果这里被跳到登录页：登录动作也会被录进技能里。")
                 print("    正式录之前先加 --profile <目录> 登一次，再重新录。")
             print("  ！两次演示要故意换参数（客户名/金额…），否则变量会被判成常量。")
-            await asyncio.to_thread(input, "\n操作完成后，回到这个窗口按回车结束录制 > ")
+            print("  ！点开新标签页也没关系：后续动作会记在正确的标签页上。")
+
+            # 每 400ms 定型一批：否则所有动作共用结束时那一次 settle，
+            # 录到的 after_text 全一样，"操作前/后文本"就失去意义（断言会编错）。
+            async def _auto_flush() -> None:
+                while True:
+                    await asyncio.sleep(0.4)
+                    try:
+                        await recorder.flush(grace_ms=0)
+                    except Exception:  # noqa: BLE001
+                        return
+
+            flusher = asyncio.create_task(_auto_flush())
+            try:
+                await asyncio.to_thread(input, "\n操作完成后，回到这个窗口按回车结束录制 > ")
+            finally:
+                flusher.cancel()
             trace = await recorder.stop()
 
         out = Path(args.out)
@@ -1028,7 +1046,7 @@ def cmd_run_golden(args: argparse.Namespace) -> int:
 
     else:
         try:
-            from .executor.playwright_page import launch_page
+            from .executor.tabbed import launch_tabbed as launch_page
         except Exception as exc:  # noqa: BLE001
             print(f"需要 playwright：{type(exc).__name__}（先跑 scripts/bootstrap_playwright.py）")
             return 1

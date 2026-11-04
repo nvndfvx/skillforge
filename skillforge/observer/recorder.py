@@ -134,7 +134,7 @@ def _make_dispatch(page_key: int):
     def handler(payload: Any) -> None:
         recorder = _RECORDERS.get(page_key)
         if recorder is not None:
-            recorder._on_event(payload)
+            recorder._on_event(payload, page_key)
 
     return handler
 
@@ -163,8 +163,14 @@ class TraceRecorder:
         settle_poll_ms: int = 120,
         pause_threshold_ms: int = 3000,
         version: str = __version__,
+        context: Any = None,
     ) -> None:
         self.page = page
+        # 传了 context 才会跟踪"点开后新出现的标签页"；
+        # 不传就只录这一个页面（旧行为，零影响）。
+        self.context = context
+        self._pages: dict[int, Any] = {0: page}
+        self._tab_of: dict[int, int] = {id(page): 0}
         self.trace_id = trace_id or f"trace-{int(time.time())}"
         self.settle_timeout_ms = int(settle_timeout_ms)
         self.settle_poll_ms = int(settle_poll_ms)
@@ -184,6 +190,13 @@ class TraceRecorder:
     async def start(self) -> None:
         # 先登记当前 recorder，再（幂等地）注册转发回调
         _RECORDERS[id(self.page)] = self
+        self._pages[0] = self.page
+        self._tab_of[id(self.page)] = 0
+        if self.context is not None:
+            try:
+                self.context.on("page", self._handle_page)
+            except Exception:
+                pass
         try:
             await self.page.expose_function(
                 "__skillforgeLog", _make_dispatch(id(self.page))
@@ -232,7 +245,13 @@ class TraceRecorder:
     async def stop(self) -> RawTrace:
         self._running = False
         await self.flush()
-        _RECORDERS.pop(id(self.page), None)
+        if self.context is not None:
+            try:
+                self.context.remove_listener("page", self._handle_page)
+            except Exception:
+                pass
+        for page in self._pages.values():
+            _RECORDERS.pop(id(page), None)
         reconciled = reconcile_form_snapshots(
             self._actions,
             self._form_snapshots,
@@ -273,13 +292,56 @@ class TraceRecorder:
         return path
 
     # -- 事件（必须同步：回调里不能重入页面） --------------------------------
-    def _on_event(self, payload: Any) -> None:
+    def _on_event(self, payload: Any, page_key: int | None = None) -> None:
         if not isinstance(payload, dict):
             return
+        tab = self._tab_of.get(page_key, 0) if page_key is not None else 0
+        payload["_tab"] = tab
+        # 事件来自哪个标签页，就把"当前页"切到那个标签页 ——
+        # 这样 flush 时的 settle / 表单快照取的是**产生这个动作的那个页面**，
+        # 而不是最后一个页面。
+        page = self._pages.get(tab)
+        if page is not None:
+            self.page = page
         now = time.monotonic()
         payload["pause_before_ms"] = int((now - self._last_event_at) * 1000)
         self._last_event_at = now
         self._pending.append(payload)
+
+    # -- 多标签 -------------------------------------------------------------
+    def _handle_page(self, new_page: Any) -> None:
+        """点开后新出现的标签页：编号 + 注入采集脚本。"""
+        if id(new_page) in self._tab_of:
+            return
+        tab = len(self._pages)
+        self._pages[tab] = new_page
+        self._tab_of[id(new_page)] = tab
+        try:
+            asyncio.create_task(self._bind_page(new_page))
+        except RuntimeError:
+            pass
+
+    async def _bind_page(self, page: Any) -> None:
+        """给新标签页装上和主页面一样的采集能力（绑定 + init script + 现有 frame）。"""
+        key = id(page)
+        _RECORDERS[key] = self
+        try:
+            await page.expose_function("__skillforgeLog", _make_dispatch(key))
+        except Exception:
+            pass
+        script = capture_script(self.version)
+        try:
+            await page.add_init_script(script=script)
+        except Exception:
+            pass
+        paths = _frame_paths(page)
+        for frame in list(getattr(page, "frames", []) or []):
+            path = paths.get(id(frame), "")
+            try:
+                await frame.evaluate("window.__skillforgeFramePath = " + json.dumps(path))
+                await frame.evaluate(script)
+            except Exception:
+                continue
 
     # -- 内部 ---------------------------------------------------------------
     def _to_action(self, payload: dict, after_text: str) -> RawAction:
@@ -307,6 +369,7 @@ class TraceRecorder:
             value=payload.get("value"),
             selector="",  # 精确 locator 留给 compiler 用指纹反查，录制期不猜
             url=self._current_url(),
+            tab=int(payload.get("_tab") or 0),
             frame_url=(fingerprint.frame_url if fingerprint else ""),
             fingerprint=fingerprint,
             before_text=str(payload.get("before_text") or ""),

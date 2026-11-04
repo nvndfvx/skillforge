@@ -1,4 +1,4 @@
-﻿"""基础类型：枚举 / 定位器 / 元素指纹 / 动作元组 / 原始轨迹。
+"""基础类型：枚举 / 定位器 / 元素指纹 / 动作元组 / 原始轨迹。
 
 纯 stdlib，无第三方依赖。
 """
@@ -167,6 +167,7 @@ class ActionTuple:
     role: str
     name_norm: str
     has_value: bool
+    tab: int = 0  # 对齐时也要考虑"这一步在哪个标签页"
 
 
 @dataclass
@@ -180,6 +181,7 @@ class RawAction:
     value: Any = None
     selector: str = ""
     url: str = ""
+    tab: int = 0  # 第几个标签页：0=初始页，1,2…=之后点开的
     frame_url: str = ""
     fingerprint: ElementFingerprint | None = None
     before_text: str = ""          # 文本摘要，不是全 DOM（快照体积控制）
@@ -206,6 +208,7 @@ class RawAction:
             "value": self.value,
             "selector": self.selector,
             "url": self.url,
+            "tab": self.tab,
             "frame_url": self.frame_url,
             "fingerprint": self.fingerprint.to_dict() if self.fingerprint else None,
             "before_text": self.before_text,
