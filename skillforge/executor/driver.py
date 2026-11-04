@@ -211,6 +211,10 @@ async def run_step(step: Step, params: Mapping[str, Any], page: PageAdapter) -> 
     if result.business_failures:
         result.status = "failed"
         result.failure_layer = "assertion"
+        # 把断言失败的具体原因带出来：否则下游（批量报告 / heal / CLI）只能显示一个 "failed"，
+        # 人根本看不出是"没出现单号"还是"单号格式不对"。
+        if not result.detail:
+            result.detail = result.business_failures[0]
     return result
 
 

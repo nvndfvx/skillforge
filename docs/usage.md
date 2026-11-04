@@ -234,6 +234,53 @@ skillforge heal --store ./store --skill skill.json --start-url "$url_v2"
 
 它会：跑一次 → 失败 → 三层定级 → 挑算子 → 打补丁 → 跑基准集 → 过闸就收，过不了就转人工。
 
+### 4.10 批量干活：一次跑一批单据
+
+前面都是"一条一条跑"。真实使用是**一批几十上百条**，这时用 `batch`。
+
+写一个清单 `cases.json`：
+
+```json
+[
+  {"item_id": "s1", "params": {"客户名称": "张三", "金额": "500"}},
+  {"item_id": "s2", "params": {"客户名称": "李四", "金额": "800"}},
+  {"item_id": "s3", "params": {"客户名称": "王五", "金额": "100"}}
+]
+```
+
+跑：
+
+```bash
+skillforge batch --store ./store --skill skill.json \
+    --cases cases.json --out report.json \
+    --resume --interval-ms 800
+```
+
+| 参数 | 作用 |
+|---|---|
+| `--resume` | 跳过上次已成功的条目（断点续跑，存在 `store/<id>/batch.json`） |
+| `--interval-ms` | 每条之间停一下，别把对方系统打挂 |
+| `--limit` | 本次最多跑几条（先小批量试水） |
+| `--stop-after-failures` | 连续失败到 N 条就停（默认不停） |
+
+**关键点：一条失败绝不中断整批。** 这是它和"跑测试"最本质的区别——干活要的是
+"剩下的先做完，挂的那几张下班再补"，而不是第一条挂了就全停。
+
+结束时打印：
+
+```
+批完成：共 3 条，成功 2，失败 1，跳过 0，通过率 66.67%
+失败分布（该修代码还是该修数据）：{'assertion': 1}
+  x s2 [assertion] 提交后没出现单号
+报告 → report.json
+```
+
+`失败分布` 是给你判断"该修代码还是该修数据"用的：
+`locator`/`assertion` 多半是页面变了，`param` 多半是清单填错了。
+
+> 续跑只记**成功**的条目，失败的会重试。跳过的条目**不进通过率分母**，
+> 否则续跑越多次，通过率越虚高。
+
 ---
 
 ## 5. 数据落在哪
@@ -243,6 +290,7 @@ skillforge heal --store ./store --skill skill.json --start-url "$url_v2"
 ├── store.json          当前版本指针 + 全部发布记录（含每条用例结果）
 ├── golden.json         回归基准集（只增不删）
 ├── signals.json        技术探针的连续失败计数（H14）
+├── batch.json          批量执行的断点（只记成功的 item_id）
 └── versions/<v>.json   每个版本的完整技能
 ```
 

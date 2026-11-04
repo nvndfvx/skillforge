@@ -336,6 +336,86 @@ def cmd_signals(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_batch(args: argparse.Namespace) -> int:
+    """批量干活：失败隔离 + 断点续跑（需要真浏览器）。"""
+    from playwright.async_api import async_playwright
+
+    from .batch import load_items, run_batch
+    from .executor.playwright_page import PlaywrightPage
+
+    store = SkillStore(args.store)
+    skill = load_skill(args.skill)
+    _override_start_url(skill, args.start_url)
+
+    try:
+        items = load_items(json.loads(Path(args.cases).read_text(encoding="utf-8")))
+    except (OSError, ValueError) as exc:
+        print(f"清单读不了：{exc}")
+        return 1
+
+    ckpt_path = store.root / skill.skill_id / "batch.json"
+    checkpoint: dict[str, str] = {}
+    if args.resume and ckpt_path.exists():
+        try:
+            checkpoint = json.loads(ckpt_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            print("断点文件坏了，忽略，从头跑")
+        else:
+            print(f"续跑：{len(checkpoint)} 条上次已成功，会跳过")
+
+    async def flow():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(channel=args.channel, headless=True)
+            try:
+
+                async def factory(item):
+                    return PlaywrightPage(await browser.new_page())
+
+                async def teardown(adapter):
+                    await adapter.page.close()
+
+                return await run_batch(
+                    skill,
+                    items,
+                    factory,
+                    checkpoint=checkpoint,
+                    limit=args.limit or None,
+                    interval_ms=args.interval_ms,
+                    stop_after_failures=args.stop_after_failures or None,
+                    teardown=teardown,
+                )
+            finally:
+                await browser.close()
+
+    try:
+        report = asyncio.run(flow())
+    except Exception as exc:  # noqa: BLE001
+        print(f"批量执行失败：{type(exc).__name__}: {str(exc)[:200]}")
+        print("若报 No module named 'playwright'，先装：pip install \"skillforge[browser]\"")
+        return 1
+
+    Path(args.out).write_text(
+        json.dumps(report.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    merged = dict(checkpoint)
+    merged.update(report.checkpoint())
+    ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+    ckpt_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(
+        f"\n批完成：共 {report.total} 条，成功 {report.passed}，"
+        f"失败 {report.failed}，跳过 {report.skipped}，通过率 {report.rate:.2%}"
+    )
+    if report.failed:
+        print(f"失败分布（该修代码还是该修数据）：{report.by_layer()}")
+        for result in report.failures()[:10]:
+            print(f"  x {result.item_id} [{result.failure_layer}] {result.detail[:100]}")
+        if report.failed > 10:
+            print(f"  …… 还有 {report.failed - 10} 条，见报告")
+    print(f"报告 → {args.out}")
+    return 0 if report.failed == 0 else 1
+
+
 def cmd_record(args: argparse.Namespace) -> int:
     """打开一个真浏览器，让人操作一遍，录成 Trace.json。
 
@@ -631,6 +711,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--threshold", type=int, default=5,
                    help="technical 探针连续失败多少次升格告警")
     p.set_defaults(func=cmd_run_golden)
+
+    p = sub.add_parser("batch", help="批量执行一批单据（失败隔离 + 断点续跑，需要真浏览器）")
+    p.add_argument("--store", required=True)
+    p.add_argument("--skill", required=True)
+    p.add_argument("--cases", required=True,
+                   help="清单 JSON：[{item_id, params}] 或 {items: [...]}")
+    p.add_argument("--out", required=True, help="逐条报告输出路径")
+    p.add_argument("--start-url", default="", help="覆盖技能里的起始页")
+    p.add_argument("--limit", type=int, default=0, help="本次最多跑几条（0=不限）")
+    p.add_argument("--interval-ms", type=int, default=0, help="每条之间停多少毫秒")
+    p.add_argument("--stop-after-failures", type=int, default=0, help="失败到 N 条就停（0=不停）")
+    p.add_argument("--resume", action="store_true", help="跳过上次已成功的条目")
+    p.add_argument("--channel", default="chrome")
+    p.set_defaults(func=cmd_batch)
 
     p = sub.add_parser("record", help="打开浏览器录一遍演示（需要 playwright）")
     p.add_argument("--url", required=True, help="演示开始时的页面地址")

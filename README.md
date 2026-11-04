@@ -1,4 +1,4 @@
-﻿# SkillForge
+# SkillForge
 
 [![ci](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml/badge.svg)](https://github.com/nvndfvx/skillforge/actions/workflows/ci.yml)
 
@@ -54,6 +54,12 @@
 - **版本可回滚**，历史不删，来回切
 - **探针告警**：技术断言连续失败 N 次 → 升格成"要人看一眼"的事件（静默退化是最危险的）
 
+外加一个**批量执行**模式（`skillforge batch`）：一次跑一批单据，
+**单条失败不中断整批**，支持断点续跑和节流。
+
+> 这是"每天真的干活"和"跑测试"的本质区别：跑测试要的是"哪条挂了"，
+> 干活要的是"剩下的先做完，挂的那几张下班再补"。
+
 ## 它不做什么
 
 别把它当万能药，这几条是真的边界：
@@ -73,7 +79,7 @@
 ```bash
 git clone https://github.com/nvndfvx/skillforge.git
 cd skillforge
-python tests/run_all.py          # 101 个测试全过，零第三方依赖
+python tests/run_all.py          # 110 个测试全过，零第三方依赖
 python examples/demo_loop.py     # 端到端闭环演示（不用浏览器）
 ```
 
@@ -106,7 +112,7 @@ python scripts/bootstrap_playwright.py
 
 ```bash
 skillforge --help                              # 命令能出来
-python tests/run_all.py                        # 101 个测试全过
+python tests/run_all.py                        # 110 个测试全过
 python tests/test_real_browser.py              # 真浏览器 27 项（没装 playwright 会 SKIP）
 ```
 
@@ -156,15 +162,15 @@ skillforge release --store ./store --skill skill.json --scores scores.json
 
 | | |
 |---|---|
-| 离线测试 | **101 个**，零第三方依赖（`python tests/run_all.py`） |
+| 离线测试 | **110 个**，零第三方依赖（`python tests/run_all.py`） |
 | 真浏览器检查 | **27 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
 | CI | ubuntu + windows × Python 3.10/3.12，全绿 |
 | 闭环 | 录制 → 对齐 → 编译 → 人审三道勾 → 基准集跑批 → 过闸发布 → 自动打补丁 → 回滚 |
-| 还缺 | 批次/灰度、人审 Web UI |
+| 还缺 | 灰度发布、人审 Web UI |
 
 ## 命令行
 
-10 个子命令，覆盖闭环每一步。完整教程见 [docs/usage.md](docs/usage.md)。
+11 个子命令，覆盖闭环每一步。完整教程见 [docs/usage.md](docs/usage.md)。
 
 ```bash
 # 1. 录演示：打开浏览器，你操作一遍，录成 Trace.json（要 playwright）
@@ -201,9 +207,14 @@ python -m skillforge status   --store ./store --skill-id expense
 python -m skillforge heal --store ./store --skill skill.json \
     --start-url "file:///path/to/form.html"          # 加 --dry-run 只试不落库
 
-# 8. 看 technical 探针的连续失败（H14：只喊，不改技能）
+# 8b. 看 technical 探针的连续失败（H14：只喊，不改技能）
 python -m skillforge signals --store ./store --skill-id expense
 python -m skillforge signals --store ./store --skill-id expense --reset   # 人工确认后清零
+
+# 9. 批量干活：一次跑一批单据，失败隔离 + 断点续跑（需要真浏览器）
+python -m skillforge batch --store ./store --skill skill.json \
+    --cases cases.json --out report.json --resume --interval-ms 800
+#    cases.json: [{"item_id":"s1","params":{"客户名称":"张三","金额":"500"}}, ...]
 ```
 
 ## 架构
@@ -337,8 +348,10 @@ skillforge/
 │   ├── runner.py      Golden 跑批 + 单调性闸接线
 │   └── suggest.py     从参数生成候选用例（origin=manual_edge，需人确认）
 ├── registry.py        版本库：发布闸（GateRejected）、回滚、Golden Set 只增不删
+├── batch.py           批量执行：失败隔离 + 断点续跑 + 节流
 ├── signals.py         technical 探针的连续失败累积告警（H14，只喊不改）
-├── cli.py             命令行（compile / review / golden / release / rollback / status / run-golden）
+├── cli.py             命令行（record/compile/review/golden/run-golden/release/
+│                      rollback/status/batch/heal/signals 共 11 个）
 ├── testing.py         FakePage（tests 与 examples 共用）
 ├── scripts/
 │   └── bootstrap_playwright.py  把 playwright 装进 vendor/（绕开 pip 临时目录问题）
@@ -360,6 +373,7 @@ skillforge/
     ├── test_registry.py
     ├── test_healer.py
     ├── test_signals.py
+    ├── test_batch.py
     ├── test_cli.py
     └── test_real_browser.py
 ```
