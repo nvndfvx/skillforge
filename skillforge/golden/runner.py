@@ -12,22 +12,38 @@ from ..executor.driver import RunResult, execute
 from ..schema.models import CaseScore, GateResult, GoldenCase, Skill, monotonic_gate
 
 PageFactory = Callable[[GoldenCase], "PageAdapter | Awaitable[PageAdapter]"]
+# CLI 域用：直接给一个「跑一次技能」的函数，就不需要页面了
+SkillRunner = Callable[[Skill, dict[str, Any]], Awaitable[RunResult]]
 
 
 async def run_golden(
     skill: Skill,
     cases: Sequence[GoldenCase],
-    page_factory: PageFactory,
+    page_factory: PageFactory | None = None,
+    *,
+    runner: SkillRunner | None = None,
 ) -> list[CaseScore]:
-    """在 Golden Set 上跑一遍，产出每条用例的通过与失败。"""
+    """在 Golden Set 上跑一遍，产出每条用例的通过与失败。
+
+    两种跑法二选一：
+      - `page_factory`：浏览器域，每条用例给一个页面
+      - `runner`：CLI 域（或任何自带执行器的域），直接跑
+    这样「基准集 + 单调性闸」不必区分域 —— 凡是能分层失败的执行，都能被闸住。
+    """
+    if page_factory is None and runner is None:
+        raise ValueError("run_golden 需要 page_factory（浏览器域）或 runner（CLI 域）之一")
+
     scores: list[CaseScore] = []
     for case in cases:
-        page = page_factory(case)
-        if inspect.isawaitable(page):
-            page = await page
-        run: RunResult = await execute(
-            skill, case.params, page, run_id=f"golden::{case.case_id}"
-        )
+        if runner is not None:
+            run: RunResult = await runner(skill, dict(case.params))
+        else:
+            page = page_factory(case)  # type: ignore[misc]
+            if inspect.isawaitable(page):
+                page = await page
+            run = await execute(
+                skill, case.params, page, run_id=f"golden::{case.case_id}"
+            )
         failed = run.failed_step()
         scores.append(
             CaseScore(
@@ -55,4 +71,4 @@ def summarize(scores: Sequence[CaseScore]) -> dict[str, Any]:
     }
 
 
-__all__ = ["PageFactory", "evaluate_gate", "run_golden", "summarize"]
+__all__ = ["PageFactory", "SkillRunner", "evaluate_gate", "run_golden", "summarize"]

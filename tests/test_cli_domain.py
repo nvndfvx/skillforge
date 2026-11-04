@@ -273,6 +273,47 @@ def _subprocess_available() -> bool:
     return outcome.ok
 
 
+def test_golden_gate_works_for_cli_domain():
+    """基准集与单调性闸不该区分域：给 runner 就行，不需要页面。"""
+    from skillforge.golden.runner import evaluate_gate, run_golden
+    from skillforge.schema.models import CaseScore, GoldenCase
+
+    skill = make_skill(py_cmd("print('单号 {{单号}}')"))
+    cases = [
+        GoldenCase(case_id="c1", params={"单号": "R-20240101"}),
+        GoldenCase(case_id="c2", params={"单号": "R-20240102"}),
+    ]
+
+    async def runner(target, params):
+        return await run_cli_skill(target, params)
+
+    scores = asyncio.run(run_golden(skill, cases, runner=runner))
+    assert [s.passed for s in scores] == [True, True], scores
+
+    # 没有 page_factory 也没有 runner → 必须明确报错，而不是静默跑空
+    try:
+        asyncio.run(run_golden(skill, cases))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("两个都没给应该报错")
+
+    # 闸照样能拦住"单点翻转"
+    worse = [CaseScore("c1", True), CaseScore("c2", False)]
+    gate = evaluate_gate(scores, worse)
+    assert not gate.passed
+
+
+def test_serde_roundtrip_keeps_domain_and_precheck_command():
+    from skillforge.schema.serde import skill_from_dict
+
+    skill = make_skill(py_cmd("print('R-20240115')"), write=True, precheck_command="echo check")
+    again = skill_from_dict(skill.to_dict())
+    assert again.domain == "cli"
+    assert again.steps[0].precheck_command == "echo check"
+    assert again.steps[0].action is ActionKind.RUN
+
+
 def main() -> int:
     if not _subprocess_available():
         print("SKIP 当前环境禁止创建子进程（DSH 沙箱）—— 请在普通终端或 CI 里跑本脚本")

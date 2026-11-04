@@ -146,11 +146,13 @@ async def run_batch(
     stop_after_failures: int | None = None,
     teardown: PageTeardown | None = None,
     resolver: Callable[[Any], "Skill | Awaitable[Skill]"] | None = None,
+    runner: Callable[[Any, dict[str, Any]], Any] | None = None,
 ) -> BatchReport:
     """批量执行。任何一条失败都不会中断整批（除非显式设了 stop_after_failures）。
 
     `resolver(item) -> Skill` 用于灰度：每条按自己的 key 决定走哪个版本。
-    不传就是全程用同一个 skill。
+    `runner(skill, params) -> RunResult` 用于 CLI 域：不需要页面，直接跑。
+    不传就全程用同一个 skill + page_factory。
     """
     report = BatchReport()
     done = dict(checkpoint or {})
@@ -174,10 +176,14 @@ async def run_batch(
                 target = resolver(item)
                 if inspect.isawaitable(target):
                     target = await target
-            page = page_factory(item)
-            if inspect.isawaitable(page):
-                page = await page
-            run = await execute(target, item.params, page, run_id=f"batch::{item.item_id}")
+            if runner is not None:
+                # CLI 域：没有页面，直接跑
+                run = await runner(target, dict(item.params))
+            else:
+                page = page_factory(item)
+                if inspect.isawaitable(page):
+                    page = await page
+                run = await execute(target, item.params, page, run_id=f"batch::{item.item_id}")
         except Exception as exc:  # noqa: BLE001 - 单条炸了不能拖垮整批
             report.results.append(
                 BatchResult(

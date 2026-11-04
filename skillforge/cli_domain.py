@@ -19,8 +19,8 @@ CLI 域把 `ActionKind.RUN` 映射成进程执行，断言打在 `stdout + stder
 from __future__ import annotations
 
 import asyncio
+import locale
 import os
-import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,6 +82,17 @@ class CommandOutcome:
         return self.returncode == 0 and not self.timed_out
 
 
+def _decode(raw: bytes) -> str:
+    """先按 UTF-8 解；Windows 上的老工具常吐 GBK/CP437，那就退到系统区域编码。
+
+    用 `replace` 而不是抛错：输出里脏一个字，不该让整条技能失败。
+    """
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode(locale.getpreferredencoding(False), "replace")
+
+
 async def run_command(
     command: str,
     *,
@@ -106,8 +117,7 @@ async def run_command(
         except Exception:  # noqa: BLE001
             pass
         return CommandOutcome(returncode=-1, output=f"（超时 {timeout_s}s 被杀）", timed_out=True)
-    encoding = "utf-8" if sys.platform != "win32" else "utf-8"
-    return CommandOutcome(returncode=proc.returncode or 0, output=raw.decode(encoding, "replace"))
+    return CommandOutcome(returncode=proc.returncode or 0, output=_decode(raw))
 
 
 async def run_cli_skill(

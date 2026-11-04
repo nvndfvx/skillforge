@@ -110,7 +110,7 @@ CLI 域沿用**同一条幂等门**：写步骤没有 `precheck_command` 就 `bl
 ```bash
 git clone https://github.com/nvndfvx/skillforge.git
 cd skillforge
-python tests/run_all.py          # 165 个测试（14 个 CLI 域测试需要允许创建子进程）
+python tests/run_all.py          # 167 个测试（16 个 CLI 域测试需要允许创建子进程）
 python examples/demo_loop.py     # 端到端闭环演示（不用浏览器）
 ```
 
@@ -154,13 +154,13 @@ pip install skillforge_engine-0.6.1-py3-none-any.whl
 pip install "https://github.com/nvndfvx/skillforge/releases/latest/download/skillforge_engine-0.6.1-py3-none-any.whl"
 ```
 
-> 这个 wheel 是 CI 里**真装进干净 venv、再用装进去的包跑完整套 165 个测试**之后才发布的。
+> 这个 wheel 是 CI 里**真装进干净 venv、再用装进去的包跑完整套 167 个测试**之后才发布的。
 
 ### 验证装好了
 
 ```bash
 skillforge --help                              # 命令能出来
-python tests/run_all.py                        # 165 个测试
+python tests/run_all.py                        # 167 个测试
 python tests/test_real_browser.py              # 真浏览器 27 项（没装 playwright 会 SKIP）
 ```
 
@@ -210,7 +210,7 @@ skillforge release --store ./store --skill skill.json --scores scores.json
 
 | | |
 |---|---|
-| 离线测试 | **165 个**，零第三方依赖（14 个 CLI 域测试要允许创建子进程，沙箱里会自动 SKIP） |
+| 离线测试 | **167 个**，零第三方依赖（16 个 CLI 域测试要允许创建子进程，沙箱里会自动 SKIP） |
 | 真浏览器检查 | **27 项**，真 Chrome 上跑通（`tests/test_real_browser.py`） |
 | CI | ubuntu + windows × Python 3.10/3.12，全绿 |
 | 打包 | wheel + sdist；CI 会装进干净 venv，**用装进去的包**再跑一遍全套测试 |

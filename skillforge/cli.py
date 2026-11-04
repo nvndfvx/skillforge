@@ -1,4 +1,4 @@
-"""命令行入口：把闭环的每一段变成可执行命令。
+﻿"""命令行入口：把闭环的每一段变成可执行命令。
 
     python -m skillforge compile  --trace-a a.json --trace-b b.json --out skill.json
     python -m skillforge review   --skill skill.json --steps-reviewed --confirm-assertions --precheck "R-\\d{6,}"
@@ -673,15 +673,13 @@ def cmd_canary(args: argparse.Namespace) -> int:
 
 
 def cmd_batch(args: argparse.Namespace) -> int:
-    """批量干活：失败隔离 + 断点续跑（需要真浏览器）。"""
-    from playwright.async_api import async_playwright
-
+    """批量干活：失败隔离 + 断点续跑。browser 域要真浏览器，cli 域不需要。"""
     from .batch import load_items, run_batch
-    from .executor.playwright_page import PlaywrightPage
 
     store = SkillStore(args.store)
     skill = load_skill(args.skill)
     _override_start_url(skill, args.start_url)
+    is_cli = skill.domain == "cli"
 
     try:
         items = load_items(json.loads(Path(args.cases).read_text(encoding="utf-8")))
@@ -715,29 +713,48 @@ def cmd_batch(args: argparse.Namespace) -> int:
         def resolver(item):
             return candidate if state.routes(item.item_id, item.params) else skill
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(channel=args.channel, headless=True)
-            try:
+        if is_cli:
+            from .cli_domain import make_runner
 
-                async def factory(item):
-                    return PlaywrightPage(await browser.new_page())
+            report = await run_batch(
+                skill,
+                items,
+                None,
+                checkpoint=checkpoint,
+                limit=args.limit or None,
+                interval_ms=args.interval_ms,
+                stop_after_failures=args.stop_after_failures or None,
+                resolver=resolver if state is not None else None,
+                runner=make_runner(cwd=args.cwd or None, timeout_s=args.timeout),
+            )
+        else:
+            from playwright.async_api import async_playwright
 
-                async def teardown(adapter):
-                    await adapter.page.close()
+            from .executor.playwright_page import PlaywrightPage
 
-                report = await run_batch(
-                    skill,
-                    items,
-                    factory,
-                    checkpoint=checkpoint,
-                    limit=args.limit or None,
-                    interval_ms=args.interval_ms,
-                    stop_after_failures=args.stop_after_failures or None,
-                    teardown=teardown,
-                    resolver=resolver if state is not None else None,
-                )
-            finally:
-                await browser.close()
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(channel=args.channel, headless=True)
+                try:
+
+                    async def factory(item):
+                        return PlaywrightPage(await browser.new_page())
+
+                    async def teardown(adapter):
+                        await adapter.page.close()
+
+                    report = await run_batch(
+                        skill,
+                        items,
+                        factory,
+                        checkpoint=checkpoint,
+                        limit=args.limit or None,
+                        interval_ms=args.interval_ms,
+                        stop_after_failures=args.stop_after_failures or None,
+                        teardown=teardown,
+                        resolver=resolver if state is not None else None,
+                    )
+                finally:
+                    await browser.close()
 
         if state is not None:
             for result in report.results:
@@ -956,12 +973,6 @@ def _override_start_url(skill, start_url: str) -> None:
 
 
 def cmd_run_golden(args: argparse.Namespace) -> int:
-    try:
-        from .executor.playwright_page import launch_page
-    except Exception as exc:  # noqa: BLE001
-        print(f"需要 playwright：{type(exc).__name__}（先跑 scripts/bootstrap_playwright.py）")
-        return 1
-
     store = SkillStore(args.store)
     skill = load_skill(args.skill)
     _override_start_url(skill, args.start_url)
@@ -970,28 +981,61 @@ def cmd_run_golden(args: argparse.Namespace) -> int:
         print("Golden Set 是空的，先 golden add")
         return 1
 
-    async def run_all() -> list[dict[str, Any]]:
-        from .executor.driver import execute
+    # CLI 域不需要浏览器：同一套基准集与闸，只是执行器换了
+    if skill.domain == "cli":
+        from .cli_domain import make_runner
 
-        book = SignalBook(store.root, threshold=args.threshold)
-        results: list[dict[str, Any]] = []
-        escalated: list[Any] = []
-        for case in cases:
-            params = dict(case.params)
-            params.setdefault("start_url", args.start_url)
-            async with launch_page(channel=args.channel) as page:
-                run = await execute(skill, params, page, run_id=f"golden::{case.case_id}")
-            escalated.extend(book.record_run(skill, run))
-            failed = run.failed_step()
-            results.append(
-                {
-                    "case_id": case.case_id,
-                    "passed": run.ok,
-                    "detail": (failed.detail or failed.status) if failed else "",
-                }
-            )
-        _print_escalations(escalated)
-        return results
+        runner = make_runner(cwd=args.cwd or None, timeout_s=args.timeout)
+
+        async def run_cli() -> list[dict[str, Any]]:
+            book = SignalBook(store.root, threshold=args.threshold)
+            results: list[dict[str, Any]] = []
+            escalated: list[Any] = []
+            for case in cases:
+                run = await runner(skill, dict(case.params))
+                escalated.extend(book.record_run(skill, run))
+                failed = run.failed_step()
+                results.append(
+                    {
+                        "case_id": case.case_id,
+                        "passed": run.ok,
+                        "detail": (failed.detail or failed.status) if failed else "",
+                    }
+                )
+            _print_escalations(escalated)
+            return results
+
+    else:
+        try:
+            from .executor.playwright_page import launch_page
+        except Exception as exc:  # noqa: BLE001
+            print(f"需要 playwright：{type(exc).__name__}（先跑 scripts/bootstrap_playwright.py）")
+            return 1
+
+        async def run_cli() -> list[dict[str, Any]]:
+            from .executor.driver import execute
+
+            book = SignalBook(store.root, threshold=args.threshold)
+            results: list[dict[str, Any]] = []
+            escalated: list[Any] = []
+            for case in cases:
+                params = dict(case.params)
+                params.setdefault("start_url", args.start_url)
+                async with launch_page(channel=args.channel) as page:
+                    run = await execute(skill, params, page, run_id=f"golden::{case.case_id}")
+                escalated.extend(book.record_run(skill, run))
+                failed = run.failed_step()
+                results.append(
+                    {
+                        "case_id": case.case_id,
+                        "passed": run.ok,
+                        "detail": (failed.detail or failed.status) if failed else "",
+                    }
+                )
+            _print_escalations(escalated)
+            return results
+
+    run_all = run_cli
 
     try:
         results = asyncio.run(run_all())
@@ -1079,6 +1123,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--start-url", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--channel", default="chrome")
+    p.add_argument("--cwd", default="", help="cli 域：命令的工作目录")
+    p.add_argument("--timeout", type=int, default=60, help="cli 域：单条命令超时秒数")
     p.add_argument("--threshold", type=int, default=5,
                    help="technical 探针连续失败多少次升格告警")
     p.set_defaults(func=cmd_run_golden)
@@ -1130,6 +1176,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--interval-ms", type=int, default=0, help="每条之间停多少毫秒")
     p.add_argument("--stop-after-failures", type=int, default=0, help="失败到 N 条就停（0=不停）")
     p.add_argument("--resume", action="store_true", help="跳过上次已成功的条目")
+    p.add_argument("--cwd", default="", help="cli 域：命令的工作目录")
+    p.add_argument("--timeout", type=int, default=60, help="cli 域：单条命令超时秒数")
     p.add_argument("--canary", action="store_true",
                    help="按灰度权重把条目路由到候选版本（需先 canary start）")
     p.add_argument("--channel", default="chrome")
