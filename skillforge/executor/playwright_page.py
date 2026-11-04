@@ -113,6 +113,11 @@ async def launch_page(
     *, channel: str = "chrome", headless: bool = True
 ) -> AsyncIterator[PlaywrightPage]:
     """起一个真浏览器页面。channel 用系统已装的 Chrome/Edge，免下载 ~130MB。"""
+    from ..pwtmp import ensure_playwright_temp
+
+    # 必须在 playwright 启动前做：它会在 TMP 下建 playwright-artifacts-*
+    ensure_playwright_temp()
+
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:

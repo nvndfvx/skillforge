@@ -2,6 +2,23 @@
 
 本文件记录每个版本做了什么。版本号在 `skillforge/__init__.py`，**单一来源**。
 
+## v0.7.1
+
+修复（真实用户第一次跑就撞上的）：
+
+- **`playwright` 起不来：`EPERM ... mkdtemp '...\Temp\playwright-artifacts-XXX'`**。
+  系统 Temp 目录不可写时，启动浏览器会直接失败，看起来像"没权限开浏览器"，
+  实际只是临时目录用不了。现在启动前一律把 `TMP`/`TEMP` 指到工作区的 `.tmp/pw`
+  （可用 `$env:SKILLFORGE_PWTMP` 覆盖）。
+  - 注意：不能靠"Python 能不能写系统 Temp"来判断 —— 建目录的是 playwright 的
+    **node 子进程**，Python 探测成功也可能 node 失败。所以固定用自己的目录。
+
+新增：
+
+- **`skillforge doctor`** —— 环境自检：Python 版本 / 包 / playwright / 浏览器 /
+  目录可写 / 真开一次浏览器。每一环单独验，没通的那条直接给「该怎么办」。
+  启动失败时会静默掉 playwright 的内部 traceback，只留表格。
+
 ## v0.7.0
 
 新能力：

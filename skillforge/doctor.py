@@ -97,20 +97,31 @@ async def _try_launch(channel: str) -> Check:
     except Exception as exc:  # noqa: BLE001
         return Check("真开一次浏览器", FAIL, f"导入失败：{type(exc).__name__}", "先解决上一条")
 
+    from .pwtmp import ensure_playwright_temp
+
+    moved = None
+    try:
+        moved = ensure_playwright_temp()
+    except RuntimeError as exc:
+        return Check("真开一次浏览器", FAIL, str(exc)[:200], "手动设 SKILLFORGE_PWTMP 到可写目录")
+
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(channel=channel, headless=True)
             page = await browser.new_page()
             await page.goto("about:blank")
             await browser.close()
-        return Check("真开一次浏览器", OK, f"channel={channel}")
+        detail = f"channel={channel}  临时目录={moved}"
+        return Check("真开一次浏览器", OK, detail)
     except Exception as exc:  # noqa: BLE001
-        detail = f"{type(exc).__name__}: {str(exc)[:120]}"
-        hint = (
-            "如果是在受限环境（沙箱/无桌面）里跑，这是正常的，换普通终端再试"
-            if "pipe" in detail.lower() or "WinError 5" in detail or "EPERM" in detail
-            else "检查 Chrome 是否安装、是否有权限；也可以试 --channel msedge"
-        )
+        detail = f"{type(exc).__name__}: {str(exc)[:160]}"
+        lowered = detail.lower()
+        if "mkdtemp" in lowered or "eperm" in lowered:
+            hint = "临时目录不可写。设一个可写目录：$env:TMP='D:\\some\\writable\\dir'"
+        elif "pipe" in lowered or "winerror 5" in lowered:
+            hint = "当前是受限环境（沙箱/无桌面），换普通终端再试"
+        else:
+            hint = "检查 Chrome 是否可用；也可以试 --channel msedge"
         return Check("真开一次浏览器", FAIL, detail, hint)
 
 
